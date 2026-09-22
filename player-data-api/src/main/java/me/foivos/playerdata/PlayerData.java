@@ -1,4 +1,4 @@
-package me.foivos.planets;
+package me.foivos.playerdata;
 
 import java.util.Map;
 import java.util.UUID;

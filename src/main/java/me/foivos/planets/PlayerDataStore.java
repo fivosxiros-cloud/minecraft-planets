@@ -2,6 +2,9 @@ package me.foivos.planets;
 
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
+import me.foivos.playerdata.IPlayerDataStore;
+import me.foivos.playerdata.PlayerData;
+import me.foivos.playerdata.PlayerDataContext;
 import org.bukkit.Bukkit;
 import org.bukkit.OfflinePlayer;
 import org.bukkit.configuration.ConfigurationSection;
@@ -63,33 +66,33 @@ public final class PlayerDataStore implements IPlayerDataStore {
     /**
      * Refreshes the snapshot for every online player (called on join/quit).
      */
-    public void refreshOnlinePlayers(Planets planets) {
-        if (planets == null) {
+    public void refreshOnlinePlayers(PlayerDataContext context) {
+        if (context == null) {
             return;
         }
         for (Player player : Bukkit.getOnlinePlayers()) {
-            refresh(player, planets);
+            refresh(player, context);
         }
     }
 
     /**
      * Refreshes a single player's snapshot from the live source of truth.
      */
-    public void refresh(Player player, Planets planets) {
+    public void refresh(Player player, PlayerDataContext context) {
         if (player == null) {
             return;
         }
-        refreshByUuid(player.getUniqueId(), planets);
+        refreshByUuid(player.getUniqueId(), context);
     }
 
     /**
      * Refreshes a single player's snapshot by uuid (works for offline players too).
      */
-    public void refreshByUuid(UUID uuid, Planets planets) {
+    public void refreshByUuid(UUID uuid, PlayerDataContext context) {
         if (uuid == null) {
             return;
         }
-        PlayerData data = computeSnapshot(uuid, planets);
+        PlayerData data = computeSnapshot(uuid, context);
         cache.put(uuid, data);
         save(data);
     }
@@ -135,7 +138,7 @@ public final class PlayerDataStore implements IPlayerDataStore {
     /**
      * Builds a fresh snapshot for the given player from the plugin's live state.
      */
-    private PlayerData computeSnapshot(UUID uuid, Planets planets) {
+    private PlayerData computeSnapshot(UUID uuid, PlayerDataContext context) {
         OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
         String name = offline.getName();
         if (name == null || name.isBlank()) {
@@ -144,36 +147,23 @@ public final class PlayerDataStore implements IPlayerDataStore {
 
         double balance = 0;
         Player online = offline.getPlayer();
-        if (planets.hasEconomy()) {
-            balance = online != null ? planets.getBalance(online) : 0;
+        if (context != null && context.hasEconomy()) {
+            balance = online != null ? context.getBalance(online) : 0;
         }
 
         double neb = 0;
-        if (planets != null) {
-            String placeholder = planets.nebPlaceholder();
+        if (context != null) {
+            String placeholder = context.nebPlaceholder();
             if (placeholder != null && !placeholder.isBlank() && !placeholder.equals("%neb%")) {
                 neb = Placeholders.readNumber(offline, placeholder, 0);
             }
         }
 
-        double playtimeHours = planets != null ? planets.hoursPlayed(uuid) : 0;
-
-        int planetsOwned = 0;
-        if (planets.getMyPlanetManager() != null) {
-            planetsOwned = planets.getMyPlanetManager().ownedCount(uuid);
-        }
-
-        int homesCount = 0;
-        if (planets.getHomeManager() != null) {
-            homesCount = planets.getHomeManager().count(uuid);
-        }
-
-        Map<String, Boolean> settings = new LinkedHashMap<>();
-        if (planets.getPlayerSettings() != null) {
-            for (PlayerSettings.Setting setting : PlayerSettings.Setting.values()) {
-                settings.put(setting.name(), planets.getPlayerSettings().get(uuid, setting));
-            }
-        }
+        double playtimeHours = context != null ? context.hoursPlayed(uuid) : 0;
+        int planetsOwned = context != null ? context.planetsOwned(uuid) : 0;
+        int homesCount = context != null ? context.homesCount(uuid) : 0;
+        Map<String, Boolean> settings = context != null
+                ? new LinkedHashMap<>(context.settings(uuid)) : new LinkedHashMap<>();
 
         long firstJoined = offline.getFirstPlayed();
         if (firstJoined <= 0) {
@@ -194,12 +184,12 @@ public final class PlayerDataStore implements IPlayerDataStore {
         File file = new File(dataFolder, uuid.toString() + ".yml");
         if (!file.exists()) {
             // No file yet — build a lightweight snapshot from the offline profile.
-            return computeSnapshot(uuid, plugin instanceof Planets p ? p : null);
+            return computeSnapshot(uuid, plugin instanceof PlayerDataContext context ? context : null);
         }
         FileConfiguration yaml = YamlConfiguration.loadConfiguration(file);
         ConfigurationSection root = yaml.getConfigurationSection("");
         if (root == null) {
-            return computeSnapshot(uuid, plugin instanceof Planets p ? p : null);
+            return computeSnapshot(uuid, plugin instanceof PlayerDataContext context ? context : null);
         }
         String name = root.getString("name", uuid.toString().substring(0, 8));
         double balance = root.getDouble(BALANCE_KEY, 0);

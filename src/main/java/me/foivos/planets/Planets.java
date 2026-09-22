@@ -1,5 +1,8 @@
 package me.foivos.planets;
 
+import me.foivos.playerdata.IPlayerDataStore;
+import me.foivos.playerdata.PlayerData;
+import me.foivos.playerdata.PlayerDataContext;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -63,7 +66,7 @@ import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Collectors;
 
-public final class Planets extends JavaPlugin implements CommandExecutor, TabCompleter {
+public final class Planets extends JavaPlugin implements CommandExecutor, TabCompleter, PlayerDataContext {
 
     /** How long "/planets lock" waits (seconds) before a planet actually locks. */
     private static final int DEFAULT_LOCK_WARNING_SECONDS = 10;
@@ -4733,12 +4736,14 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     private net.milkbowl.vault.economy.Economy economy = null;
 
     /** Whether any economy is available via Vault. */
-    boolean hasEconomy() {
+    @Override
+    public boolean hasEconomy() {
         return economy != null;
     }
 
     /** Get a player's money balance, or -1 when economy is not available. */
-    double getBalance(Player player) {
+    @Override
+    public double getBalance(Player player) {
         if (!hasEconomy()) return -1;
         return economy.getBalance(player);
     }
@@ -4787,7 +4792,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     private final Map<UUID, Double> daysPlayedCache = new HashMap<>();
 
     /** Returns the player's playtime in hours (fractional). Same source as {@link #daysPlayed(UUID)}. */
-    double hoursPlayed(UUID uuid) {
+    @Override
+    public double hoursPlayed(UUID uuid) {
         double days = daysPlayed(uuid);
         return days * 24.0;
     }
@@ -5212,9 +5218,25 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return myPlanetManager;
     }
 
+    @Override
+    public int planetsOwned(UUID uuid) {
+        return myPlanetManager == null ? 0 : myPlanetManager.ownedCount(uuid);
+    }
+
     /** Returns every player's personal preferences (/settings). */
     PlayerSettings getPlayerSettings() {
         return playerSettings;
+    }
+
+    @Override
+    public Map<String, Boolean> settings(UUID uuid) {
+        Map<String, Boolean> result = new LinkedHashMap<>();
+        if (playerSettings != null) {
+            for (PlayerSettings.Setting setting : PlayerSettings.Setting.values()) {
+                result.put(setting.name(), playerSettings.get(uuid, setting));
+            }
+        }
+        return result;
     }
 
     /**
@@ -5245,6 +5267,11 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     /** Returns every player's saved homes (/home). */
     HomeManager getHomeManager() {
         return homeManager;
+    }
+
+    @Override
+    public int homesCount(UUID uuid) {
+        return homeManager == null ? 0 : homeManager.count(uuid);
     }
 
     /**
