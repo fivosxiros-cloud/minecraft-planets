@@ -35,6 +35,7 @@ me\foivos\planets\PlayerSettingsMenu.class
 me\foivos\planets\PlanetEnvironment$Atmosphere.class
 me\foivos\planets\Planets$PendingHomeTeleport.class
 me\foivos\planets\MyPlanetUpgradesMenu.class
+me\foivos\planets\PlayerData.class
 me\foivos\planets\PlanetTerrain.class
 me\foivos\planets\MyPlanetInvitesMenu.class
 me\foivos\planets\HomeColourMenu.class
@@ -42,7 +43,6 @@ me\foivos\planets\PlanetSkyPackets$1.class
 me\foivos\planets\Planets$HelpSign.class
 me\foivos\planets\Planets$TpaRequest.class
 me\foivos\planets\AdminPlanetPanelMenu.class
-me\foivos\planets\PlayerDataStore$PlayerData.class
 me\foivos\planets\AdminPlanetPanelMenu$Confirmation.class
 me\foivos\planets\HomesMenu.class
 me\foivos\planets\AdminTerrainMenu.class

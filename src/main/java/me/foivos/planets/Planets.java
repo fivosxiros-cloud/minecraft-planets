@@ -238,7 +238,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     private final PlanetMusic music = new PlanetMusic(this);
 
     /** Persistent per-player data center: balance, NEB, playtime, planets, homes, settings. */
-    private PlayerDataStore playerData;
+    private IPlayerDataStore playerData;
 
     /** ProtocolLib-based true sky tinting, or null when ProtocolLib is absent. */
     private PlanetSkyPackets skyPackets;
@@ -1325,7 +1325,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 return List.of();
             }
             return playerData.search(prefix).stream()
-                    .map(PlayerDataStore.PlayerData::name)
+                    .map(PlayerData::name)
                     .toList();
         }
 

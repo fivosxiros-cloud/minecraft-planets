@@ -17,22 +17,7 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
-/**
- * Persistent per-player data center for the whole plugin.
- * <p>
- * Every player gets a {@code player-data/<uuid>.yml} file that snapshots the
- * most useful aggregate values the plugin knows about them: VPL balance, NEB,
- * playtime in hours, number of planets owned, number of homes, their current
- * personal settings, when they first joined this server and when they were last
- * online. Other plugins or future admin tools can read these files directly, or
- * ask the store through {@link #get(UUID)} / {@link #getAll()}.
- * <p>
- * The store is loaded on demand and written when a player's snapshot is updated
- * (join, quit, admin dump). It is <em>not</em> a replacement for the existing
- * per-feature YAML files (my-planets.yml, homes.yml, player-settings.yml) — it
- * is a read-friendly summary layer on top of them.
- */
-public final class PlayerDataStore {
+public final class PlayerDataStore implements IPlayerDataStore {
 
     private static final String DATA_FOLDER_NAME = "player-data";
     private static final String LAST_ONLINE_KEY = "last-online-ms";
@@ -46,7 +31,9 @@ public final class PlayerDataStore {
 
     private final JavaPlugin plugin;
     private final File dataFolder;
-    /** In-memory cache of the most recently loaded snapshot per uuid. */
+    /**
+     * In-memory cache of the most recently loaded snapshot per uuid.
+     */
     private final Map<UUID, PlayerData> cache = new ConcurrentHashMap<>();
 
     public PlayerDataStore(JavaPlugin plugin) {
@@ -54,14 +41,18 @@ public final class PlayerDataStore {
         this.dataFolder = new File(plugin.getDataFolder(), DATA_FOLDER_NAME);
     }
 
-    /** Creates the data folder if it does not exist yet. */
+    /**
+     * Creates the data folder if it does not exist yet.
+     */
     public void ensureFolder() {
         if (!dataFolder.exists()) {
             dataFolder.mkdirs();
         }
     }
 
-    /** Returns the snapshot for the given player, loading it from disk if needed. */
+    /**
+     * Returns the snapshot for the given player, loading it from disk if needed.
+     */
     public PlayerData get(UUID uuid) {
         if (uuid == null) {
             return PlayerData.EMPTY;
@@ -69,7 +60,9 @@ public final class PlayerDataStore {
         return cache.computeIfAbsent(uuid, this::load);
     }
 
-    /** Refreshes the snapshot for every online player (called on join/quit). */
+    /**
+     * Refreshes the snapshot for every online player (called on join/quit).
+     */
     public void refreshOnlinePlayers(Planets planets) {
         if (planets == null) {
             return;
@@ -79,7 +72,9 @@ public final class PlayerDataStore {
         }
     }
 
-    /** Refreshes a single player's snapshot from the live source of truth. */
+    /**
+     * Refreshes a single player's snapshot from the live source of truth.
+     */
     public void refresh(Player player, Planets planets) {
         if (player == null) {
             return;
@@ -87,7 +82,9 @@ public final class PlayerDataStore {
         refreshByUuid(player.getUniqueId(), planets);
     }
 
-    /** Refreshes a single player's snapshot by uuid (works for offline players too). */
+    /**
+     * Refreshes a single player's snapshot by uuid (works for offline players too).
+     */
     public void refreshByUuid(UUID uuid, Planets planets) {
         if (uuid == null) {
             return;
@@ -97,7 +94,9 @@ public final class PlayerDataStore {
         save(data);
     }
 
-    /** Returns every snapshot currently in memory + any still-on-disk entries. */
+    /**
+     * Returns every snapshot currently in memory + any still-on-disk entries.
+     */
     public List<PlayerData> getAll() {
         List<PlayerData> result = new ArrayList<>(cache.values());
         File[] files = dataFolder.listFiles();
@@ -121,7 +120,9 @@ public final class PlayerDataStore {
         return result;
     }
 
-    /** Returns every snapshot for players with the given name (case-insensitive prefix). */
+    /**
+     * Returns every snapshot for players with the given name (case-insensitive prefix).
+     */
     public List<PlayerData> search(String prefix) {
         String lower = prefix == null ? "" : prefix.toLowerCase(Locale.ROOT);
         return getAll().stream()
@@ -131,7 +132,9 @@ public final class PlayerDataStore {
 
     // ── snapshot construction ───────────────────────────────────────────────
 
-    /** Builds a fresh snapshot for the given player from the plugin's live state. */
+    /**
+     * Builds a fresh snapshot for the given player from the plugin's live state.
+     */
     private PlayerData computeSnapshot(UUID uuid, Planets planets) {
         OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
         String name = offline.getName();
@@ -241,7 +244,9 @@ public final class PlayerDataStore {
 
     // ── admin dump ──────────────────────────────────────────────────────────
 
-    /** Prints a full snapshot of the given player to the command sender. */
+    /**
+     * Prints a full snapshot of the given player to the command sender.
+     */
     public void dumpTo(CommandSender sender, UUID uuid) {
         if (sender == null) {
             return;
@@ -276,12 +281,4 @@ public final class PlayerDataStore {
         sender.sendMessage(Component.text("─── end ───").color(NamedTextColor.GOLD));
     }
 
-    /** One immutable snapshot of everything the plugin knows about a player. */
-    public record PlayerData(UUID uuid, String name, double balance, double neb,
-                             double playtimeHours, int planetsOwned, int homesCount,
-                             Map<String, Boolean> settings, long firstJoinedMs, long lastOnlineMs) {
-        /** A sentinel for unknown players. */
-        public static final PlayerData EMPTY = new PlayerData(null, "unknown", 0, 0, 0,
-                0, 0, Map.of(), 0, 0);
-    }
 }
