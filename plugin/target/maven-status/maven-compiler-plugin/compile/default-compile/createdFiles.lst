@@ -66,7 +66,6 @@ me\foivos\planets\PlanetArchetypes.class
 me\foivos\planets\Planets.class
 me\foivos\planets\ForSaleConfirmMenu.class
 me\foivos\planets\LeaderboardsMenu.class
-me\foivos\planets\PlayerDataStore.class
 me\foivos\planets\MusicPickerMenu.class
 me\foivos\planets\PlanetEnvironment$AmbientParticles.class
 me\foivos\planets\Planets$HudMode.class

@@ -12,6 +12,7 @@
     <name>planets</name>
     <modules>
         <module>player-data-api</module>
+        <module>player-data-yaml</module>
         <module>plugin</module>
     </modules>
 

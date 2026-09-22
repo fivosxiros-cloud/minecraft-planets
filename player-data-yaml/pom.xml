@@ -9,15 +9,14 @@
         <version>v1.0</version>
     </parent>
 
-    <artifactId>planets</artifactId>
-    <name>planets</name>
+    <artifactId>player-data-yaml</artifactId>
+    <name>player-data-yaml</name>
 
     <dependencies>
         <dependency>
             <groupId>me.foivos</groupId>
             <artifactId>player-data-api</artifactId>
             <version>${project.version}</version>
-            <scope>provided</scope>
         </dependency>
         <dependency>
             <groupId>io.papermc.paper</groupId>
@@ -25,25 +24,12 @@
             <version>[26.1.2.build,)</version>
             <scope>provided</scope>
         </dependency>
-        <dependency>
-            <groupId>net.dmulloy2</groupId>
-            <artifactId>ProtocolLib</artifactId>
-            <version>5.4.0</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
-            <groupId>net.milkbowl.vault</groupId>
-            <artifactId>VaultAPI</artifactId>
-            <version>1.7</version>
-            <scope>provided</scope>
-        </dependency>
     </dependencies>
 
     <build>
-        <sourceDirectory>../src/main/java</sourceDirectory>
         <resources>
             <resource>
-                <directory>../src/main/resources</directory>
+                <directory>src/main/resources</directory>
                 <filtering>true</filtering>
             </resource>
         </resources>

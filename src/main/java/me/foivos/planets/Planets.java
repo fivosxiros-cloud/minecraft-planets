@@ -338,7 +338,13 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
 
         // Persistent per-player data center for the whole plugin.
-        this.playerData = new PlayerDataStore(this);
+        this.playerData = getServer().getServicesManager()
+                .load(me.foivos.playerdata.IPlayerDataStore.class);
+        if (this.playerData == null) {
+            getLogger().severe("player-data-yaml did not register IPlayerDataStore; disabling.");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
         playerData.ensureFolder();
         playerData.refreshOnlinePlayers(this);
 
