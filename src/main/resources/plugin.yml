@@ -95,6 +95,23 @@ commands:
     usage: /tpdeny [player]
     permission: planets.settings
     aliases: [tpno]
+  friend:
+    description: Adds a friend, or opens a friend's profile
+    usage: /friend <player> | /friend <accept|deny|cancel|remove|gift|profile|search|requests|activity|settings> [args]
+    permission: planets.friends
+  friends:
+    description: Opens the friends menu (online first, favorites, requests, search, activity)
+    usage: /friends [requests|activity|settings|search <name>]
+    permission: planets.friends
+  cards:
+    description: Opens the Entity Card Hunt (collection, event info, leaderboard, timer)
+    usage: /cards [collection|info|leaderboard|timer]
+    permission: planets.cards
+    aliases: [c]
+  cardeventduration:
+    description: Sets how much longer the Entity Card Hunt runs
+    usage: /cardeventduration set <hours> | /cardeventduration info
+    permission: planets.cards.admin
 
 permissions:
   planets.use:
@@ -150,4 +167,13 @@ permissions:
     default: true
   planets.settings.bypass:
     description: Private messages and teleport requests ignore a player's own toggles
+    default: op
+  planets.friends:
+    description: Allows using /friend and /friends (friends, requests, gifts and the social settings)
+    default: true
+  planets.cards:
+    description: Allows opening the Entity Card Hunt with /cards and /c
+    default: true
+  planets.cards.admin:
+    description: Allows changing the Entity Card Hunt's end time with /cardeventduration
     default: op

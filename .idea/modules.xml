@@ -5,6 +5,7 @@
       <module fileurl="file://$PROJECT_DIR$/planets.iml" filepath="$PROJECT_DIR$/planets.iml" />
       <module fileurl="file://$PROJECT_DIR$/plugin/planets (1).iml" filepath="$PROJECT_DIR$/plugin/planets (1).iml" />
       <module fileurl="file://$PROJECT_DIR$/player-data-api/player-data-api.iml" filepath="$PROJECT_DIR$/player-data-api/player-data-api.iml" />
+      <module fileurl="file://$PROJECT_DIR$/player-data-yaml/player-data-yaml.iml" filepath="$PROJECT_DIR$/player-data-yaml/player-data-yaml.iml" />
     </modules>
   </component>
 </project>

@@ -1,0 +1,14 @@
+# Maven build output
+target/
+
+# IntelliJ IDEA project files
+.idea/
+*.iml
+out/
+
+# Maven shade leftovers
+dependency-reduced-pom.xml
+
+# OS cruft
+.DS_Store
+Thumbs.db

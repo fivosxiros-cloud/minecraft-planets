@@ -39,6 +39,8 @@ public final class PlayerSettingsMenu implements InventoryHolder {
     private static final int SIZE = 54;
     private static final int INFO_SLOT = 4;
     private static final int RESET_SLOT = 47;
+    /** Opens the Friends category page (the social toggles). */
+    private static final int FRIENDS_SLOT = 49;
     private static final int CLOSE_SLOT = 51;
     /**
      * Where the toggles sit, in order: four rows of seven. The current settings
@@ -50,6 +52,10 @@ public final class PlayerSettingsMenu implements InventoryHolder {
             28, 29, 30, 31, 32, 33, 34,
             37, 38, 39, 40, 41, 42, 43
     };
+
+    /** The toggles drawn on this page: everything outside the Friends category. */
+    private static final PlayerSettings.Setting[] GENERAL_SETTINGS =
+            PlayerSettings.Setting.of(PlayerSettings.Category.GENERAL);
 
     private final Planets plugin;
     private final Player viewer;
@@ -84,6 +90,12 @@ public final class PlayerSettingsMenu implements InventoryHolder {
             player.closeInventory();
             return;
         }
+        if (slot == FRIENDS_SLOT) {
+            pendingReset = false;
+            player.closeInventory();
+            new FriendSettingsMenu(plugin, player, settings).open(player);
+            return;
+        }
         if (slot == RESET_SLOT) {
             if (!pendingReset) {
                 pendingReset = true;
@@ -102,6 +114,7 @@ public final class PlayerSettingsMenu implements InventoryHolder {
             plugin.refreshSkyTint(player);
             plugin.planetMusic().stop(player);
             plugin.planetMusic().startNow(player);
+            plugin.sidebarScoreboard().refresh(player);
             render();
             return;
         }
@@ -113,7 +126,7 @@ public final class PlayerSettingsMenu implements InventoryHolder {
                 break;
             }
         }
-        PlayerSettings.Setting[] all = PlayerSettings.Setting.values();
+        PlayerSettings.Setting[] all = GENERAL_SETTINGS;
         if (index < 0 || index >= all.length) {
             return;
         }
@@ -128,6 +141,13 @@ public final class PlayerSettingsMenu implements InventoryHolder {
                 player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.8f, 1.4f);
             }
             render();
+            return;
+        }
+        // The sidebar item opens its line picker on a right-click, the same way
+        // the Planet HUD item cycles its lines.
+        if (setting == PlayerSettings.Setting.SIDEBAR && event.isRightClick()) {
+            player.closeInventory();
+            new SidebarEditorMenu(plugin, player).open(player);
             return;
         }
         // The menu redraws below with the new state and the same description, so
@@ -163,15 +183,16 @@ public final class PlayerSettingsMenu implements InventoryHolder {
 
         inventory.setItem(INFO_SLOT, infoItem());
 
-        PlayerSettings.Setting[] all = PlayerSettings.Setting.values();
+        PlayerSettings.Setting[] all = GENERAL_SETTINGS;
         for (int i = 0; i < all.length && i < TOGGLE_SLOTS.length; i++) {
-            inventory.setItem(TOGGLE_SLOTS[i], toggleItem(all[i]));
+            inventory.setItem(TOGGLE_SLOTS[i], toggleItem(plugin, viewer, settings, all[i]));
         }
         if (all.length > TOGGLE_SLOTS.length) {
             plugin.getLogger().warning("The /settings menu has room for " + TOGGLE_SLOTS.length
                     + " toggles but " + all.length + " exist.");
         }
 
+        inventory.setItem(FRIENDS_SLOT, friendsCategoryItem());
         inventory.setItem(RESET_SLOT, pendingReset ? resetConfirmItem() : resetItem());
 
         ItemStack close = new ItemStack(Material.BARRIER);
@@ -193,6 +214,7 @@ public final class PlayerSettingsMenu implements InventoryHolder {
         lore.add(line("set until you switch them back."));
         lore.add(line(""));
         lore.add(line(PlayerSettings.Setting.values().length + " settings available"));
+        lore.add(line("Grouped into Global and 👥 Friends"));
         lore.add(line(changed == 0
                         ? "All settings are at their defaults"
                         : changed + " setting(s) changed from the default",
@@ -204,7 +226,42 @@ public final class PlayerSettingsMenu implements InventoryHolder {
         return item;
     }
 
-    private ItemStack toggleItem(PlayerSettings.Setting setting) {
+    /** The button that opens the Friends category of the settings. */
+    private ItemStack friendsCategoryItem() {
+        int total = PlayerSettings.Setting.of(PlayerSettings.Category.FRIENDS).length;
+        int changed = 0;
+        for (PlayerSettings.Setting setting : PlayerSettings.Setting.of(PlayerSettings.Category.FRIENDS)) {
+            if (settings.get(viewer.getUniqueId(), setting) != setting.defaultOn()) {
+                changed++;
+            }
+        }
+        ItemStack item = new ItemStack(Material.PLAYER_HEAD);
+        org.bukkit.inventory.meta.SkullMeta meta = (org.bukkit.inventory.meta.SkullMeta) item.getItemMeta();
+        meta.setOwningPlayer(viewer);
+        meta.displayName(Component.text("\uD83D\uDC65 Friends").color(NamedTextColor.AQUA)
+                .decoration(TextDecoration.ITALIC, false));
+        List<Component> lore = new ArrayList<>();
+        lore.add(line("Requests, join/quit notes, gifts and privacy"));
+        lore.add(line(total + " social settings"));
+        lore.add(line(changed == 0
+                        ? "All at their defaults"
+                        : changed + " changed from the default",
+                changed == 0 ? NamedTextColor.GREEN : NamedTextColor.YELLOW));
+        lore.add(line("Also reachable with /friends \u2192 Settings"));
+        lore.add(line(""));
+        lore.add(Component.text("Click to open the Friends settings")
+                .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
+        meta.lore(lore);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    /**
+     * One setting drawn as a toggle. Shared with {@link FriendSettingsMenu}, so
+     * both pages of {@code /settings} look and behave the same way.
+     */
+    static ItemStack toggleItem(Planets plugin, Player viewer, PlayerSettings settings,
+                                PlayerSettings.Setting setting) {
         boolean on = settings.get(viewer.getUniqueId(), setting);
         ItemStack item = setting.icon();
         ItemMeta meta = item.getItemMeta();
@@ -228,6 +285,16 @@ public final class PlayerSettingsMenu implements InventoryHolder {
         if (setting == PlayerSettings.Setting.MUSIC && !plugin.planetMusic().enabled()) {
             // The server switched the whole soundtrack off in config.yml.
             lore.add(line("Music is switched off on this server", NamedTextColor.YELLOW));
+        }
+        if (setting == PlayerSettings.Setting.SIDEBAR) {
+            SidebarScoreboard bar = plugin.sidebarScoreboard();
+            lore.add(line("Showing " + bar.visibleLines(viewer).size() + " of "
+                    + bar.lines().size() + " lines", NamedTextColor.YELLOW));
+            lore.add(Component.text("Right-click to pick the lines")
+                    .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
+            if (!bar.enabled()) {
+                lore.add(line("Switched off on this server", NamedTextColor.DARK_RED));
+            }
         }
         lore.add(line(""));
         lore.add(Component.text("Currently: ").color(NamedTextColor.GRAY)

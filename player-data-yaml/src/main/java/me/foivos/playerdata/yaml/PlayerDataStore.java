@@ -38,6 +38,15 @@ public final class PlayerDataStore implements IPlayerDataStore {
      * In-memory cache of the most recently loaded snapshot per uuid.
      */
     private final Map<UUID, PlayerData> cache = new ConcurrentHashMap<>();
+    /**
+     * Last known name per uuid. Built once from the data folder and kept up to
+     * date by every save, so name lookups never touch the disk more than once.
+     */
+    private final Map<UUID, String> names = new ConcurrentHashMap<>();
+    private volatile boolean nameIndexLoaded;
+
+    /** Upper bound on how many matches a single search returns. */
+    private static final int SEARCH_LIMIT = 100;
 
     public PlayerDataStore(JavaPlugin plugin) {
         this.plugin = plugin;
@@ -50,6 +59,38 @@ public final class PlayerDataStore implements IPlayerDataStore {
     public void ensureFolder() {
         if (!dataFolder.exists()) {
             dataFolder.mkdirs();
+        }
+        loadNameIndex();
+    }
+
+    /**
+     * Reads just the stored name of every player file into memory. Done once,
+     * so a tab completion does not re-parse the whole data folder per keystroke.
+     */
+    private void loadNameIndex() {
+        if (nameIndexLoaded) {
+            return;
+        }
+        nameIndexLoaded = true;
+        File[] files = dataFolder.listFiles();
+        if (files == null) {
+            return;
+        }
+        for (File file : files) {
+            if (!file.getName().endsWith(".yml")) {
+                continue;
+            }
+            String base = file.getName().substring(0, file.getName().length() - 4);
+            UUID uuid;
+            try {
+                uuid = UUID.fromString(base);
+            } catch (IllegalArgumentException notAUuid) {
+                continue;
+            }
+            String name = YamlConfiguration.loadConfiguration(file).getString("name");
+            if (name != null && !name.isBlank()) {
+                names.put(uuid, name);
+            }
         }
     }
 
@@ -92,7 +133,7 @@ public final class PlayerDataStore implements IPlayerDataStore {
         if (uuid == null) {
             return;
         }
-        PlayerData data = computeSnapshot(uuid, context);
+        PlayerData data = computeSnapshot(uuid, context, cache.get(uuid));
         cache.put(uuid, data);
         save(data);
     }
@@ -128,8 +169,12 @@ public final class PlayerDataStore implements IPlayerDataStore {
      */
     public List<PlayerData> search(String prefix) {
         String lower = prefix == null ? "" : prefix.toLowerCase(Locale.ROOT);
-        return getAll().stream()
-                .filter(d -> d.name().toLowerCase(Locale.ROOT).startsWith(lower))
+        loadNameIndex();
+        return names.entrySet().stream()
+                .filter(entry -> entry.getValue().toLowerCase(Locale.ROOT).startsWith(lower))
+                .sorted(Map.Entry.comparingByValue(String.CASE_INSENSITIVE_ORDER))
+                .limit(SEARCH_LIMIT)
+                .map(entry -> get(entry.getKey()))
                 .collect(Collectors.toList());
     }
 
@@ -138,24 +183,36 @@ public final class PlayerDataStore implements IPlayerDataStore {
     /**
      * Builds a fresh snapshot for the given player from the plugin's live state.
      */
-    private PlayerData computeSnapshot(UUID uuid, PlayerDataContext context) {
+    private PlayerData computeSnapshot(UUID uuid, PlayerDataContext context, PlayerData previous) {
         OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
         String name = offline.getName();
         if (name == null || name.isBlank()) {
             name = uuid.toString().substring(0, 8);
         }
+        names.put(uuid, name);
 
-        double balance = 0;
-        Player online = offline.getPlayer();
+        // Anything the live server state cannot answer right now — a balance the
+        // economy would not hand back for an offline player, an unset or failing
+        // NEB placeholder — keeps its previously stored value rather than being
+        // written back as a zero.
+        double balance = previous == null ? 0 : previous.balance();
         if (context != null && context.hasEconomy()) {
-            balance = online != null ? context.getBalance(online) : 0;
+            try {
+                double live = context.getBalance(offline);
+                if (live >= 0) {
+                    balance = live;
+                }
+            } catch (RuntimeException ex) {
+                plugin.getLogger().warning(
+                        "Could not read the balance of " + name + ": " + ex.getMessage());
+            }
         }
 
-        double neb = 0;
+        double neb = previous == null ? 0 : previous.neb();
         if (context != null) {
             String placeholder = context.nebPlaceholder();
             if (placeholder != null && !placeholder.isBlank() && !placeholder.equals("%neb%")) {
-                neb = readNumber(offline, placeholder, 0);
+                neb = readNumber(offline, placeholder, neb);
             }
         }
 
@@ -183,15 +240,17 @@ public final class PlayerDataStore implements IPlayerDataStore {
     private PlayerData load(UUID uuid) {
         File file = new File(dataFolder, uuid.toString() + ".yml");
         if (!file.exists()) {
-            // No file yet — build a lightweight snapshot from the offline profile.
-            return computeSnapshot(uuid, plugin instanceof PlayerDataContext context ? context : null);
+            // No file yet — a store has no access to the consumer plugin's live
+            // state, so the rest fills in on the next refresh from the server.
+            return blankSnapshot(uuid);
         }
         FileConfiguration yaml = YamlConfiguration.loadConfiguration(file);
         ConfigurationSection root = yaml.getConfigurationSection("");
         if (root == null) {
-            return computeSnapshot(uuid, plugin instanceof PlayerDataContext context ? context : null);
+            return blankSnapshot(uuid);
         }
         String name = root.getString("name", uuid.toString().substring(0, 8));
+        names.put(uuid, name);
         double balance = root.getDouble(BALANCE_KEY, 0);
         double neb = root.getDouble(NEB_KEY, 0);
         double playtimeHours = root.getDouble(PLAYTIME_HOURS_KEY, 0);
@@ -210,7 +269,31 @@ public final class PlayerDataStore implements IPlayerDataStore {
                 planetsOwned, homesCount, settings, firstJoined, lastOnline);
     }
 
+    /**
+     * A snapshot built only from a player's offline profile (name and login
+     * dates), used when no data file exists for them yet.
+     */
+    private PlayerData blankSnapshot(UUID uuid) {
+        OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
+        String name = offline.getName();
+        if (name == null || name.isBlank()) {
+            name = uuid.toString().substring(0, 8);
+        }
+        names.put(uuid, name);
+        long firstJoined = offline.getFirstPlayed();
+        if (firstJoined <= 0) {
+            firstJoined = System.currentTimeMillis();
+        }
+        long lastOnline = offline.getLastPlayed();
+        if (lastOnline <= 0) {
+            lastOnline = firstJoined;
+        }
+        return new PlayerData(uuid, name, 0, 0, 0, 0, 0,
+                new LinkedHashMap<>(), firstJoined, lastOnline);
+    }
+
     private void save(PlayerData data) {
+        names.put(data.uuid(), data.name());
         File file = new File(dataFolder, data.uuid().toString() + ".yml");
         FileConfiguration yaml = new YamlConfiguration();
         yaml.set("name", data.name());

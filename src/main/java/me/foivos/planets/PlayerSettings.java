@@ -10,7 +10,9 @@ import org.bukkit.potion.PotionType;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -27,6 +29,14 @@ import java.util.logging.Level;
  * something.
  */
 public final class PlayerSettings {
+
+    /**
+     * Which page of {@code /settings} a toggle lives on. Everything that played
+     * a part before the Friends &amp; Social system was added is
+     * {@link #GENERAL}; the social switches sit behind the Friends category
+     * button, so the main page stays as short as it always was.
+     */
+    public enum Category { GENERAL, FRIENDS }
 
     /**
      * The toggles shown in the /settings menu. Each one carries the short
@@ -109,7 +119,45 @@ public final class PlayerSettings {
         NIGHT_VISION("Night Vision", Material.POTION,
                 "Endless night vision while you play",
                 "You always see in the dark (endless night vision)",
-                "You see in the dark normally");
+                "You see in the dark normally"),
+        // ── Display ─────────────────────────────────────────────────────
+        SIDEBAR("Sidebar Scoreboard", Material.OAK_SIGN,
+                "The panel down the right of your screen: your balance, playtime, deaths and kills",
+                "The sidebar is drawn down the right of your screen",
+                "No sidebar — your screen stays clear"),
+        // ── Friends & Social (the Friends category of /settings) ────────
+        FRIEND_REQUESTS("Friend Requests", Material.PLAYER_HEAD,
+                "Friend requests other players can send you",
+                "Players can send you friend requests",
+                "Nobody can send you friend requests", Category.FRIENDS),
+        FRIEND_JOIN_NOTIFICATIONS("Join Notifications", Material.LIME_DYE,
+                "A note when one of your friends comes online",
+                "You're told when a friend joins",
+                "Friends coming online is silent", Category.FRIENDS),
+        FRIEND_QUIT_NOTIFICATIONS("Quit Notifications", Material.GRAY_DYE,
+                "A note when one of your friends goes offline",
+                "You're told when a friend quits",
+                "Friends leaving is silent", Category.FRIENDS),
+        FRIEND_MESSAGES("Friend Messages", Material.WRITABLE_BOOK,
+                "Private messages between you and your friends",
+                "Your friends can message you",
+                "Friend messages are muted", Category.FRIENDS),
+        GIFT_NOTIFICATIONS("Gift Notifications", Material.CHEST,
+                "A note when a gift arrives for you",
+                "You're told about gifts as they arrive",
+                "Gifts arrive silently (they're still in /friends)", Category.FRIENDS),
+        ACTIVITY_NOTIFICATIONS("Activity Notifications", Material.KNOWLEDGE_BOOK,
+                "Chat notes about what your friends get up to",
+                "Friend activity is announced to you",
+                "Activity stays in the menu only", Category.FRIENDS),
+        FRIEND_PRIVACY("Profile Privacy", Material.IRON_DOOR,
+                "Who can see your balance, playtime and stats",
+                "Only your friends can see your profile details",
+                "Anyone who opens your profile can see your details", Category.FRIENDS),
+        ONLINE_STATUS("Online Status", Material.ENDER_EYE,
+                "Whether others can see you online, AFK or offline",
+                "Friends can see when you're online, AFK or away",
+                "You always look offline to everyone else", Category.FRIENDS);
 
         private final String displayName;
         private final Material icon;
@@ -117,20 +165,46 @@ public final class PlayerSettings {
         private final String enabledText;
         private final String disabledText;
         private final boolean defaultOn;
+        private final Category category;
 
         Setting(String displayName, Material icon, String description,
                 String enabledText, String disabledText) {
-            this(displayName, icon, description, enabledText, disabledText, true);
+            this(displayName, icon, description, enabledText, disabledText, true, Category.GENERAL);
         }
 
         Setting(String displayName, Material icon, String description,
                 String enabledText, String disabledText, boolean defaultOn) {
+            this(displayName, icon, description, enabledText, disabledText, defaultOn, Category.GENERAL);
+        }
+
+        Setting(String displayName, Material icon, String description,
+                String enabledText, String disabledText, Category category) {
+            this(displayName, icon, description, enabledText, disabledText, true, category);
+        }
+
+        Setting(String displayName, Material icon, String description,
+                String enabledText, String disabledText, boolean defaultOn, Category category) {
             this.displayName = displayName;
             this.icon = icon;
             this.description = description;
             this.enabledText = enabledText;
             this.disabledText = disabledText;
             this.defaultOn = defaultOn;
+            this.category = category;
+        }
+
+        /** Which /settings page this toggle is shown on. */
+        public Category category() { return category; }
+
+        /** The toggles belonging to one category, in declaration order. */
+        public static Setting[] of(Category category) {
+            List<Setting> result = new ArrayList<>();
+            for (Setting setting : values()) {
+                if (setting.category == category) {
+                    result.add(setting);
+                }
+            }
+            return result.toArray(new Setting[0]);
         }
 
         /**
@@ -189,6 +263,12 @@ public final class PlayerSettings {
     /** uuid -> the Planet HUD line that player picked, when it isn't the default. */
     private final Map<UUID, Integer> hudModes = new ConcurrentHashMap<>();
 
+    /**
+     * uuid -> the sidebar lines that player picked, in the order they want them.
+     * A player with no entry follows {@code sidebar.lines} from config.yml.
+     */
+    private final Map<UUID, List<String>> sidebarLines = new ConcurrentHashMap<>();
+
     public PlayerSettings(Planets plugin) {
         this.plugin = plugin;
         this.file = new File(plugin.getDataFolder(), "player-settings.yml");
@@ -200,6 +280,7 @@ public final class PlayerSettings {
     public void load() {
         values.clear();
         hudModes.clear();
+        sidebarLines.clear();
         if (!file.exists()) {
             config = new YamlConfiguration();
             return;
@@ -243,6 +324,12 @@ public final class PlayerSettings {
                     }
                 }
             }
+            // An empty list is a real answer here ("none of the lines"), so the
+            // key's presence is what decides, not whether it holds anything.
+            String sidebarPath = "players." + key + ".sidebar-lines";
+            if (config.contains(sidebarPath)) {
+                sidebarLines.put(uuid, new ArrayList<>(config.getStringList(sidebarPath)));
+            }
         }
         plugin.getLogger().info("Loaded personal settings for " + values.size() + " player(s).");
     }
@@ -259,6 +346,9 @@ public final class PlayerSettings {
         }
         for (Map.Entry<UUID, Integer> entry : hudModes.entrySet()) {
             config.set("players." + entry.getKey() + ".hud-mode", entry.getValue());
+        }
+        for (Map.Entry<UUID, List<String>> entry : sidebarLines.entrySet()) {
+            config.set("players." + entry.getKey() + ".sidebar-lines", entry.getValue());
         }
         try {
             config.save(file);
@@ -328,14 +418,44 @@ public final class PlayerSettings {
         this.defaultHudMode = Math.max(0, index);
     }
 
+    // ── Sidebar lines ───────────────────────────────────────────────────
+
+    /**
+     * The sidebar lines this player picked, in the order they want them, or
+     * {@code null} when they never changed them — which means every line
+     * config.yml offers, in the order it lists them.
+     */
+    public List<String> sidebarLines(UUID uuid) {
+        List<String> chosen = sidebarLines.get(uuid);
+        return chosen == null ? null : List.copyOf(chosen);
+    }
+
+    /** Saves this player's own sidebar lines and persists them. */
+    public void setSidebarLines(UUID uuid, List<String> ids) {
+        if (uuid == null) {
+            return;
+        }
+        sidebarLines.put(uuid, new ArrayList<>(ids == null ? List.of() : ids));
+        save();
+    }
+
+    /** Drops this player's sidebar choice, so they follow the configured list. */
+    public void clearSidebarLines(UUID uuid) {
+        sidebarLines.remove(uuid);
+        save();
+    }
+
     /** Whether the player changed anything from the defaults. */
     public boolean anyCustom(UUID uuid) {
-        return values.containsKey(uuid) || hudModes.containsKey(uuid);
+        return values.containsKey(uuid) || hudModes.containsKey(uuid) || sidebarLines.containsKey(uuid);
     }
 
     /** How many of a player's settings differ from the default. */
     public int customCount(UUID uuid) {
         int count = hudModes.containsKey(uuid) ? 1 : 0;
+        if (sidebarLines.containsKey(uuid)) {
+            count++;
+        }
         EnumMap<Setting, Boolean> map = values.get(uuid);
         if (map == null) {
             return count;
@@ -352,6 +472,7 @@ public final class PlayerSettings {
     public void reset(UUID uuid) {
         values.remove(uuid);
         hudModes.remove(uuid);
+        sidebarLines.remove(uuid);
         save();
     }
 

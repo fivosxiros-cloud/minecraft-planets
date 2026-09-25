@@ -240,6 +240,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     /** The planet soundtrack behind the "Planet Music" toggle in /settings. */
     private final PlanetMusic music = new PlanetMusic(this);
 
+    /** The sidebar scoreboard (right of the screen) behind /settings → Sidebar. */
+    private final SidebarScoreboard sidebar = new SidebarScoreboard(this);
+
     /** Persistent per-player data center: balance, NEB, playtime, planets, homes, settings. */
     private IPlayerDataStore playerData;
 
@@ -248,6 +251,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     /** The HUD lines players can cycle through (config: {@code hud.modes}). */
     private List<HudMode> hudModes = DEFAULT_HUD_MODES;
+
+    /** Friends, requests, presence, gifts and the activity feed (friends.yml). */
+    private FriendSystem friendSystem;
+    /** Routing for {@code /friend} and {@code /friends}. */
+    private FriendCommand friendCommand;
+
+    /** The Entity Card Hunt: cards, drops, collection and event timer. */
+    private CardService cardService;
+    /** Routing for {@code /cards}, {@code /c} and {@code /cardeventduration}. */
+    private CardsCommand cardsCommand;
 
     @Override
     public void onEnable() {
@@ -275,6 +288,12 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         // The soundtrack needs the same planet and lobby lists the HUD uses.
         music.loadConfig(getConfig());
         music.start(this);
+        // The sidebar is per player, so it draws for everyone who wants it.
+        if (sidebar.loadConfig(getConfig())) {
+            // config.yml had no sidebar section yet — keep the written one.
+            saveConfigQuietly();
+        }
+        sidebar.start();
 
         // Worlds are only all in place once every plugin has enabled (Multiverse
         // loads its own), so the safety-net terrain pass runs a few seconds later.
@@ -336,6 +355,22 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 extraCommand.setTabCompleter(this);
             }
         }
+        // /friend and /friends.
+        for (String commandName : List.of("friend", "friends")) {
+            org.bukkit.command.PluginCommand extraCommand = getCommand(commandName);
+            if (extraCommand != null) {
+                extraCommand.setExecutor(this);
+                extraCommand.setTabCompleter(this);
+            }
+        }
+        // /cards (alias /c) and the admin /cardeventduration.
+        for (String commandName : List.of("cards", "cardeventduration")) {
+            org.bukkit.command.PluginCommand extraCommand = getCommand(commandName);
+            if (extraCommand != null) {
+                extraCommand.setExecutor(this);
+                extraCommand.setTabCompleter(this);
+            }
+        }
 
         // Persistent per-player data center for the whole plugin.
         this.playerData = getServer().getServicesManager()
@@ -347,6 +382,18 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
         playerData.ensureFolder();
         playerData.refreshOnlinePlayers(this);
+
+        // Friends & Social: its own services over friends.yml, plus the
+        // /friend + /friends commands and the presence listener.
+        this.friendSystem = new FriendSystem(this);
+        this.friendCommand = new FriendCommand(this, friendSystem);
+        friendSystem.start();
+
+        // The Entity Card Hunt: its own catalogue, collection store and timer.
+        this.cardService = new CardService(this);
+        this.cardsCommand = new CardsCommand(this, cardService);
+        getServer().getPluginManager().registerEvents(new CardDropListener(cardService), this);
+        cardService.start();
 
         // Hook into Vault economy.
         setupEconomy();
@@ -417,9 +464,29 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof PlayerSettingsMenu menu) {
                     menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof SidebarEditorMenu menu) {
+                    menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof HomeColourMenu menu) {
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof HomesMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof FriendsMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof FriendProfileMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof FriendRequestsMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof MutualFriendsMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof FriendSettingsMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof CardsMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof CardCollectionMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof CardEventInfoMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof CardLeaderboardMenu menu) {
                     menu.handleClick(event);
                 }
             }
@@ -599,6 +666,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 if (playerData != null) {
                     playerData.refresh(event.getPlayer(), Planets.this);
                 }
+                // Draw their sidebar straight away rather than at the next tick.
+                sidebar.refresh(player);
+                // Friends: presence, pending requests and the join note to friends.
+                if (friendSystem != null) {
+                    friendSystem.onJoin(player);
+                }
+                // Cards: keep the stored name fresh for the leaderboard.
+                if (cardService != null) {
+                    cardService.onJoin(player);
+                }
             }
 
             // Drop the tracked effect set so leaving a planet only ever strips the
@@ -632,6 +709,12 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 // Snapshot the departing player into the data center.
                 if (playerData != null) {
                     playerData.refreshByUuid(quitter, Planets.this);
+                }
+                // Hand the departing player back their normal scoreboard.
+                sidebar.detach(event.getPlayer());
+                // Friends: tell friends they left and drop their pending prompts.
+                if (friendSystem != null) {
+                    friendSystem.onQuit(event.getPlayer());
                 }
             }
 
@@ -885,6 +968,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             public void onAsyncChat(AsyncChatEvent event) {
                 Player player = event.getPlayer();
 
+                // Friend prompts: a search term, a private message, a gift amount.
+                if (friendSystem != null && friendSystem.hasPrompt(player)) {
+                    event.setCancelled(true);
+                    String input = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+                            .plainText().serialize(event.message()).trim();
+                    Bukkit.getScheduler().runTask(Planets.this,
+                            () -> friendSystem.handleChatInput(player, input));
+                    return;
+                }
+
                 // /home prompts: naming a new home, or renaming an existing one.
                 HomePrompt homePrompt = pendingHomePrompts.remove(player.getUniqueId());
                 if (homePrompt != null) {
@@ -954,18 +1047,54 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         if (myPlanetManager != null) {
             myPlanetManager.save();
         }
+        if (friendSystem != null) {
+            friendSystem.shutdown();
+        }
+        if (cardService != null) {
+            cardService.shutdown();
+        }
         if (playerSettings != null) {
             playerSettings.save();
         }
         if (homeManager != null) {
             homeManager.save();
         }
+        sidebar.shutdown();
     }
 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         // /lobby, /hub and /l open the LOBBIES menu for any player with planets.use.
         String commandName = command.getName().toLowerCase(Locale.ROOT);
+
+        // /friend and /friends — the Friends & Social system.
+        if (commandName.equals("friend") || commandName.equals("friends")) {
+            if (friendCommand == null) {
+                sender.sendMessage(Component.text("Friends are not available right now.")
+                        .color(NamedTextColor.RED));
+                return true;
+            }
+            return friendCommand.handle(sender, commandName, args);
+        }
+
+        // /cards, /c and the admin /cardeventduration — the Entity Card Hunt.
+        if (commandName.equals("cards") || commandName.equals("c")) {
+            if (cardsCommand == null) {
+                sender.sendMessage(Component.text("The card event is not available right now.")
+                        .color(NamedTextColor.RED));
+                return true;
+            }
+            return cardsCommand.handleCards(sender, args);
+        }
+        if (commandName.equals("cardeventduration")) {
+            if (cardsCommand == null) {
+                sender.sendMessage(Component.text("The card event is not available right now.")
+                        .color(NamedTextColor.RED));
+                return true;
+            }
+            return cardsCommand.handleDuration(sender, args);
+        }
+
         if (commandName.equals("lobby") || commandName.equals("hub") || commandName.equals("l")) {
             if (!(sender instanceof Player player)) {
                 sender.sendMessage(Component.text("Only players can use the lobby commands.").color(NamedTextColor.RED));
@@ -1090,6 +1219,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             PlanetEffects.loadConfig(getConfig());
             environment.loadConfig(getConfig());
             music.loadConfig(getConfig());
+            if (sidebar.loadConfig(getConfig())) {
+                saveConfigQuietly();
+            }
+            sidebar.start();
             if (MenuStyle.loadConfig(getConfig().getConfigurationSection("menu-style"))) {
                 saveConfig();
             }
@@ -1226,10 +1359,25 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     @Override
     public @NotNull List<String> onTabComplete(@NotNull CommandSender sender, @NotNull Command command, @NotNull String alias, @NotNull String[] args) {
+        String tabCommand = command.getName().toLowerCase(Locale.ROOT);
+        // The card event's admin command is the one command the console can
+        // complete too, so it is answered before the player-only guard below.
+        if (tabCommand.equals("cardeventduration")) {
+            return cardsCommand == null ? List.of()
+                    : cardsCommand.tabComplete(sender, tabCommand, args);
+        }
         if (!(sender instanceof Player player) || args.length == 0) {
             return List.of();
         }
-        String commandName = command.getName().toLowerCase(Locale.ROOT);
+        String commandName = tabCommand;
+        if (commandName.equals("friend") || commandName.equals("friends")) {
+            return friendCommand == null
+                    ? List.of() : friendCommand.tabComplete(player, commandName, args);
+        }
+        if (commandName.equals("cards") || commandName.equals("c")) {
+            return cardsCommand == null
+                    ? List.of() : cardsCommand.tabComplete(sender, commandName, args);
+        }
         if (commandName.equals("lobby") || commandName.equals("hub") || commandName.equals("l")) {
             return lobbyTabComplete(player, args);
         }
@@ -4749,7 +4897,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     /** Get a player's money balance, or -1 when economy is not available. */
     @Override
-    public double getBalance(Player player) {
+    public double getBalance(OfflinePlayer player) {
         if (!hasEconomy()) return -1;
         return economy.getBalance(player);
     }
@@ -4796,6 +4944,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     /** Memoized playtime per player, so the leaderboard never re-reads a data file. */
     private final Map<UUID, Double> daysPlayedCache = new HashMap<>();
+    /** When each memoized playtime was read, so an old reading can expire. */
+    private final Map<UUID, Long> daysPlayedCacheAt = new HashMap<>();
+    /** How long a memoized playtime stays valid, in milliseconds. */
+    private static final long DAYS_PLAYED_TTL_MS = 60_000L;
 
     /** Returns the player's playtime in hours (fractional). Same source as {@link #daysPlayed(UUID)}. */
     @Override
@@ -4816,7 +4968,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             return 0;
         }
         Double cached = daysPlayedCache.get(uuid);
-        if (cached != null) {
+        Long readAt = daysPlayedCacheAt.get(uuid);
+        if (cached != null && readAt != null
+                && System.currentTimeMillis() - readAt < DAYS_PLAYED_TTL_MS) {
             return cached;
         }
         OfflinePlayer offline = Bukkit.getOfflinePlayer(uuid);
@@ -4836,6 +4990,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             }
         }
         daysPlayedCache.put(uuid, days);
+        daysPlayedCacheAt.put(uuid, System.currentTimeMillis());
         return days;
     }
 
@@ -5270,9 +5425,97 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return music;
     }
 
+    /** The sidebar scoreboard shown on every player's screen. */
+    SidebarScoreboard sidebarScoreboard() {
+        return sidebar;
+    }
+
     /** Returns every player's saved homes (/home). */
     HomeManager getHomeManager() {
         return homeManager;
+    }
+
+    // ── Friends & Social ────────────────────────────────────────────────
+
+    /** The friends system: friends, requests, presence, gifts and activity. */
+    FriendSystem friendSystem() {
+        return friendSystem;
+    }
+
+    /** The latest data-centre snapshot for a player, or null when there is none. */
+    PlayerData playerDataOf(UUID uuid) {
+        return uuid == null || playerData == null ? null : playerData.get(uuid);
+    }
+
+    /** Every player this server has data for whose name starts with a prefix. */
+    List<PlayerData> searchPlayers(String prefix) {
+        return playerData == null ? List.of() : playerData.search(prefix);
+    }
+
+    /**
+     * Known player names matching a prefix (online players plus everyone the
+     * data centre remembers), for friend search and tab completion.
+     */
+    List<String> knownPlayerNames(String prefix) {
+        String lower = prefix == null ? "" : prefix.toLowerCase(Locale.ROOT);
+        Set<String> names = new java.util.TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        for (Player online : Bukkit.getOnlinePlayers()) {
+            if (online.getName().toLowerCase(Locale.ROOT).startsWith(lower)) {
+                names.add(online.getName());
+            }
+        }
+        if (playerData != null) {
+            for (PlayerData data : playerData.search(prefix)) {
+                if (data.name() != null
+                        && data.name().toLowerCase(Locale.ROOT).startsWith(lower)) {
+                    names.add(data.name());
+                }
+            }
+        }
+        return new ArrayList<>(names);
+    }
+
+    /**
+     * Resolves a name typed into a friend command to a uuid, preferring the
+     * data centre so players who are offline still work.
+     */
+    UUID resolveFriendQuery(String query) {
+        return resolveDataUuid(query);
+    }
+
+    /** Credits an offline player through Vault (used by friend gifts). */
+    boolean depositTo(OfflinePlayer player, double amount) {
+        if (!hasEconomy() || player == null) {
+            return false;
+        }
+        try {
+            return economy.depositPlayer(player, amount).transactionSuccess();
+        } catch (RuntimeException ex) {
+            getLogger().warning("Could not deposit to " + player.getName() + ": " + ex.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Sends a private message through the plugin's existing messaging path, so
+     * a friend message obeys exactly the same rules as any other one — the
+     * receiver's Private Messages toggle included.
+     */
+    boolean messagePlayer(Player from, Player to, String message) {
+        if (from == null || to == null || from.equals(to)) {
+            return false;
+        }
+        if (!playerSettings.get(to.getUniqueId(), PlayerSettings.Setting.MSG)
+                && !from.hasPermission("planets.settings.bypass")) {
+            from.sendMessage(Component.text(to.getName()).color(NamedTextColor.YELLOW)
+                    .append(Component.text(" has private messages turned off.")
+                            .color(NamedTextColor.RED)));
+            return false;
+        }
+        deliverMessage(from, to, message);
+        replyTargets.put(to.getUniqueId(), from.getUniqueId());
+        replyTargets.put(from.getUniqueId(), to.getUniqueId());
+        return true;
     }
 
     @Override
@@ -5634,13 +5877,41 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             return;
         }
         String query = args[2];
-        OfflinePlayer target = Bukkit.getOfflinePlayer(query);
-        if (target.getName() == null || target.getName().isBlank()) {
-            player.sendMessage(Component.text("Unknown player '").color(NamedTextColor.RED)
+        UUID targetUuid = resolveDataUuid(query);
+        if (targetUuid == null) {
+            player.sendMessage(Component.text("No player-data record for '").color(NamedTextColor.RED)
                     .append(Component.text(query).color(NamedTextColor.YELLOW))
                     .append(Component.text("'.").color(NamedTextColor.RED)));
             return;
         }
+        // Snapshots are written at join and quit, so an online player's copy can
+        // be a whole session out of date — refresh it before printing.
+        if (Bukkit.getPlayer(targetUuid) != null) {
+            playerData.refreshByUuid(targetUuid, this);
+        }
+        playerData.dumpTo(player, targetUuid);
+    }
+
+    /**
+     * Resolves a typed name to a uuid, preferring the data centre (so players who
+     * are offline still resolve) and falling back to the server's own lookup.
+     */
+    private UUID resolveDataUuid(String query) {
+        if (query == null || query.isBlank()) {
+            return null;
+        }
+        List<PlayerData> hits = playerData.search(query);
+        for (PlayerData hit : hits) {
+            if (hit.name().equalsIgnoreCase(query)) {
+                return hit.uuid();
+            }
+        }
+        if (!hits.isEmpty()) {
+            return hits.get(0).uuid();
+        }
+        OfflinePlayer offline = Bukkit.getOfflinePlayer(query);
+        String name = offline.getName();
+        return name == null || name.isBlank() ? null : offline.getUniqueId();
     }
 
     /** The name of a homes owner, or a short uuid when it can't be resolved. */
@@ -5841,19 +6112,26 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * exactly as typed, so a typo shows up in the HUD instead of vanishing.
      *
      * <p>Available: {@code %planet% %world% %balance% %x% %y% %z% %players%
-     * %visitors%} and, on a player-owned planet, {@code %members% %blocks%
-     * %block-limit% %size% %next-size%}.
+     * %visitors%}, anything about the player ({@code %player% %playtime%
+     * %deaths% %kills% %planets% %neb%}) and, on a player-owned planet,
+     * {@code %members% %blocks% %block-limit% %size% %next-size%}.
      */
     String renderHudTemplate(Player player, String template) {
         World world = player.getWorld();
         Location here = player.getLocation();
         MyPlanetData data = world == null || myPlanetManager == null
                 ? null : myPlanetManager.get(world.getName());
-        double balance = hasEconomy() ? getBalance(player) : 0;
-        return template
+        // The sidebar re-renders every line of every player every second, so the
+        // lookups that reach another plugin (the economy, PlaceholderAPI) or a
+        // player's statistics only run for the placeholders actually in use.
+        boolean wantsBalance = template.contains("%balance%");
+        boolean wantsNeb = template.contains("%neb%");
+        boolean wantsDeaths = template.contains("%deaths%");
+        boolean wantsKills = template.contains("%kills%");
+        boolean wantsPlanets = template.contains("%planets%");
+        String rendered = template
                 .replace("%planet%", worldLabel(world))
                 .replace("%world%", world == null ? "?" : world.getName())
-                .replace("%balance%", formatPrice(balance))
                 .replace("%x%", String.valueOf(here.getBlockX()))
                 .replace("%y%", String.valueOf(here.getBlockY()))
                 .replace("%z%", String.valueOf(here.getBlockZ()))
@@ -5864,7 +6142,61 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .replace("%block-limit%", data == null ? "-" : String.valueOf(data.blockLimit()))
                 .replace("%size%", data == null ? "-"
                         : MyPlanetData.sizeName(data.upgradeLevel(MyPlanetData.Upgrade.PLANET_SIZE)))
-                .replace("%next-size%", data == null ? "-" : nextSizeCost(data));
+                .replace("%next-size%", data == null ? "-" : nextSizeCost(data))
+                // Everything about the player themselves, for the sidebar.
+                .replace("%player%", player.getName())
+                .replace("%playtime%", formatPlaytime(hoursPlayed(player.getUniqueId())))
+                // Friends online / friends total, e.g. "2/8".
+                .replace("%friends%", friendSystem == null
+                        ? "0/0" : friendSystem.countLabel(player.getUniqueId()))
+                // Entity Card Hunt: unique/total, copies, and the countdown.
+                .replace("%cards%", cardService == null
+                        ? "0/0" : cardService.uniqueLabel(player.getUniqueId()))
+                .replace("%cards-unique%", cardService == null
+                        ? "0" : String.valueOf(cardService.unique(player.getUniqueId())))
+                .replace("%cards-total%", cardService == null
+                        ? "0" : String.valueOf(cardService.total()))
+                .replace("%cards-copies%", cardService == null
+                        ? "0" : String.valueOf(cardService.copies(player.getUniqueId())))
+                .replace("%cards-time%", cardService == null
+                        ? "-" : cardService.remainingShort());
+        if (wantsBalance) {
+            rendered = rendered.replace("%balance%",
+                    formatPrice(hasEconomy() ? getBalance(player) : 0));
+        }
+        if (wantsNeb) {
+            rendered = rendered.replace("%neb%", formatPrice(nebValue(player)));
+        }
+        if (wantsDeaths) {
+            rendered = rendered.replace("%deaths%",
+                    String.valueOf(statistic(player, Statistic.DEATHS)));
+        }
+        if (wantsKills) {
+            rendered = rendered.replace("%kills%",
+                    String.valueOf(statistic(player, Statistic.PLAYER_KILLS)));
+        }
+        if (wantsPlanets) {
+            rendered = rendered.replace("%planets%",
+                    String.valueOf(planetsOwned(player.getUniqueId())));
+        }
+        return rendered;
+    }
+
+    /** A player's own statistic, or 0 when the server cannot read it. */
+    private static int statistic(Player player, Statistic statistic) {
+        try {
+            return player.getStatistic(statistic);
+        } catch (RuntimeException | LinkageError ex) {
+            return 0;
+        }
+    }
+
+    /** The NEB value behind the configured placeholder (0 when it can't be read). */
+    double nebValue(Player player) {
+        if (nebPlaceholderIsUnset()) {
+            return 0;
+        }
+        return Placeholders.readNumber(player, nebPlaceholder(), 0);
     }
 
     // ── In-game HUD editor (/planets hud) ───────────────────────────────
@@ -6112,7 +6444,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return pendingRenames.containsKey(id) || pendingSells.containsKey(id)
                 || pendingDeletes.containsKey(id) || helpChatSearch.containsKey(id)
                 || pendingLobbyEdits.containsKey(id) || pendingHomePrompts.containsKey(id)
-                || pendingHudNames.containsKey(id);
+                || pendingHudNames.containsKey(id)
+                || (friendSystem != null && friendSystem.hasPrompt(player));
     }
 
     /**
@@ -7559,6 +7892,27 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     }
 
     /** Formats a playtime in days for menus: 0.5 -> "0.5 days", 1 -> "1 day". */
+    /**
+     * Playtime as a short {@code 1d 4h} / {@code 3h 20m} / {@code 45m} string,
+     * for the places with one line to spare (the sidebar and the Planet HUD).
+     */
+    public static String formatPlaytime(double hours) {
+        if (hours <= 0) {
+            return "0m";
+        }
+        long totalMinutes = Math.round(hours * 60.0);
+        long days = totalMinutes / (60 * 24);
+        long hoursPart = (totalMinutes % (60 * 24)) / 60;
+        long minutes = totalMinutes % 60;
+        if (days > 0) {
+            return days + "d " + hoursPart + "h";
+        }
+        if (hoursPart > 0) {
+            return hoursPart + "h " + minutes + "m";
+        }
+        return minutes + "m";
+    }
+
     public static String formatDays(double days) {
         if (days <= 0) {
             return "0 days";
@@ -8002,6 +8356,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         help(entries, "Social", Material.SPYGLASS, "Planet HUD",
                 "an action bar on planets and lobbies; right-click its /settings item to cycle what it shows",
                 "planets.settings");
+        help(entries, "Social", Material.OAK_SIGN, "Sidebar",
+                "the panel down the right of your screen: your balance, playtime, deaths and kills; "
+                        + "right-click its /settings item to pick the lines and their order",
+                "planets.settings");
         help(entries, "Social", Material.NAME_TAG, "/msg <player> <message>  |  /r <message>",
                 "private messages — each player can switch them off", "planets.settings");
         help(entries, "Social", Material.ENDER_PEARL,
@@ -8157,6 +8515,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 "opens the dashboard, planet list and per-planet action panel", "planets.admin");
         help(entries, "Panel", Material.SPYGLASS, "/planets hud",
                 "the in-game Planet HUD editor: add, rename, reorder and preview the action-bar lines",
+                "planets.admin");
+        help(entries, "Panel", Material.RECOVERY_COMPASS, "/planets admin playerdata <player>",
+                "the player-data centre: VPL, NEB, playtime, planets owned, homes, first/last seen "
+                        + "and every personal setting",
                 "planets.admin");
         help(entries, "Panel", Material.COMPARATOR, "Dashboard: Browse Planets",
                 "every planet as a list — click one for its actions", "planets.admin");

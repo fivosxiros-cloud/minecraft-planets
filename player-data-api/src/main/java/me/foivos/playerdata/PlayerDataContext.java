@@ -1,6 +1,6 @@
 package me.foivos.playerdata;
 
-import org.bukkit.entity.Player;
+import org.bukkit.OfflinePlayer;
 
 import java.util.Map;
 import java.util.UUID;
@@ -11,7 +11,7 @@ import java.util.UUID;
 public interface PlayerDataContext {
     boolean hasEconomy();
 
-    double getBalance(Player player);
+    double getBalance(OfflinePlayer player);
 
     String nebPlaceholder();
 
