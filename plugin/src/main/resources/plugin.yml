@@ -1,0 +1,178 @@
+name: planets
+version: '${version}'
+
+main: me.foivos.planets.Planets
+api-version: '26.1.2'
+load: POSTWORLD
+softdepend: [Multiverse-Core, ProtocolLib, Vault, PlaceholderAPI]
+
+commands:
+  planets:
+    description: Opens the planet teleportation menu
+    usage: /planets
+    aliases: [p]
+    permission: planets.use
+  lobby:
+    description: Opens the LOBBIES menu
+    usage: /lobby
+    permission: planets.use
+  hub:
+    description: Opens the LOBBIES menu
+    usage: /hub
+    permission: planets.use
+  l:
+    description: Opens the LOBBIES menu
+    usage: /l
+    permission: planets.use
+  myp:
+    description: Opens the My Planet management menu
+    usage: /myp [claim|rename|invite|uninvite|accept|deny|sell|resetblockcounts] [args]
+    permission: planets.use
+    aliases: [myplanet]
+  bal:
+    description: Shows a player's VPL balance
+    usage: /bal <player>
+    permission: planets.bal
+    aliases: [balance]
+  leaderboards:
+    description: Opens the leaderboards menu (richest players by VPL)
+    usage: /leaderboards
+    permission: planets.leaderboards
+    aliases: [lb, lead]
+  sus:
+    description: Flag a player as suspicious and open the SUS list
+    usage: /sus <player> | /sus list | /sus remove <player> | /sus stop
+    permission: planets.sus
+  sl:
+    description: Opens the SUS list menu
+    usage: /sl
+    permission: planets.sus
+  home:
+    description: Opens your homes menu, or teleports straight to a home
+    usage: /home [name]
+    permission: planets.homes
+    aliases: [homes]
+  sethome:
+    description: Saves your current position as a home
+    usage: /sethome [name]
+    permission: planets.homes
+  delhome:
+    description: Deletes one of your saved homes
+    usage: /delhome <name>
+    permission: planets.homes
+    aliases: [remhome]
+  settings:
+    description: Opens your personal settings menu
+    usage: /settings
+    permission: planets.settings
+    aliases: [prefs, options]
+  msg:
+    description: Sends a private message to a player
+    usage: /msg <player> <message>
+    permission: planets.settings
+    aliases: [tell, w, whisper, pm]
+  r:
+    description: Replies to the last private message
+    usage: /r <message>
+    permission: planets.settings
+    aliases: [reply]
+  tpa:
+    description: Requests to teleport to a player
+    usage: /tpa <player>
+    permission: planets.settings
+  tpahere:
+    description: Requests a player to teleport to you
+    usage: /tpahere <player>
+    permission: planets.settings
+  tpaccept:
+    description: Accepts a pending teleport request
+    usage: /tpaccept [player]
+    permission: planets.settings
+    aliases: [tpyes]
+  tpdeny:
+    description: Denies a pending teleport request
+    usage: /tpdeny [player]
+    permission: planets.settings
+    aliases: [tpno]
+  friend:
+    description: Adds a friend, or opens a friend's profile
+    usage: /friend <player> | /friend <accept|deny|cancel|remove|gift|profile|search|requests|activity|settings> [args]
+    permission: planets.friends
+  friends:
+    description: Opens the friends menu (online first, favorites, requests, search, activity)
+    usage: /friends [requests|activity|settings|search <name>]
+    permission: planets.friends
+  cards:
+    description: Opens the Entity Card Hunt (collection, event info, leaderboard, timer)
+    usage: /cards [collection|info|leaderboard|timer]
+    permission: planets.cards
+    aliases: [c]
+  cardeventduration:
+    description: Sets how much longer the Entity Card Hunt runs
+    usage: /cardeventduration set <hours> | /cardeventduration info
+    permission: planets.cards.admin
+
+permissions:
+  planets.use:
+    description: Allows using /planets to open the planet menu
+    default: true
+  planets.create:
+    description: Allows creating new planets with /planets create
+    default: op
+  planets.admin:
+    description: Allows opening the op-only planet admin panel with /planets admin
+    default: op
+  planets.icon:
+    description: Allows changing a planet's menu icon with /planets icon
+    default: op
+  planets.landing:
+    description: Allows setting where players land on a planet with /planets landing
+    default: op
+  planets.delete:
+    description: Allows deleting planets with /planets delete
+    default: op
+  planets.lock:
+    description: Allows locking planets with /planets lock
+    default: op
+  planets.world:
+    description: Allows changing world properties with /planets world
+    default: op
+  planets.atmosphere.bypass:
+    description: Immune to hostile atmosphere damage on planets
+    default: false
+  planets.tp.*:
+    description: Allows visiting every planet, including locked ones
+    default: false
+  planets.reload:
+    description: Allows reloading the config with /planets reload
+    default: op
+  planets.buy:
+    description: Allows buying a brand-new planet with /planets buy
+    default: true
+  planets.bal:
+    description: Allows checking a player's VPL balance with /bal
+    default: true
+  planets.leaderboards:
+    description: Allows opening the leaderboards menu with /leaderboards, /lb or /lead
+    default: true
+  planets.sus:
+    description: Allows flagging players with /sus and opening the SUS list with /sus list or /sl
+    default: op
+  planets.homes:
+    description: Allows using /home, /sethome and /delhome
+    default: true
+  planets.settings:
+    description: Allows using /settings, private messages (/msg, /r) and teleport requests (/tpa, /tpaccept, /tpdeny)
+    default: true
+  planets.settings.bypass:
+    description: Private messages and teleport requests ignore a player's own toggles
+    default: op
+  planets.friends:
+    description: Allows using /friend and /friends (friends, requests, gifts and the social settings)
+    default: true
+  planets.cards:
+    description: Allows opening the Entity Card Hunt with /cards and /c
+    default: true
+  planets.cards.admin:
+    description: Allows changing the Entity Card Hunt's end time with /cardeventduration
+    default: op

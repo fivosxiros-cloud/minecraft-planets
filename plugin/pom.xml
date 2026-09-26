@@ -14,12 +14,6 @@
 
     <dependencies>
         <dependency>
-            <groupId>me.foivos</groupId>
-            <artifactId>player-data-api</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-        <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
             <version>[26.1.2.build,)</version>
@@ -40,10 +34,9 @@
     </dependencies>
 
     <build>
-        <sourceDirectory>../src/main/java</sourceDirectory>
         <resources>
             <resource>
-                <directory>../src/main/resources</directory>
+                <directory>src/main/resources</directory>
                 <filtering>true</filtering>
             </resource>
         </resources>

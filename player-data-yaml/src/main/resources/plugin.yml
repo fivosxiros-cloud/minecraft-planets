@@ -1,5 +1,0 @@
-name: player-data-yaml
-version: '${version}'
-main: me.foivos.playerdata.yaml.PlayerDataYamlPlugin
-api-version: '26.1.2'
-load: STARTUP
