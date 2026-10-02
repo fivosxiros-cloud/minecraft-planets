@@ -85,6 +85,25 @@ final class PlanetEffects {
         return effects == null ? Map.of() : Map.copyOf(effects);
     }
 
+    /**
+     * The amplifier a world has configured for an effect, or null when it has
+     * none. The lookup goes through {@link #typeFor} on both sides, so asking
+     * about "jump" also finds a world configured with "jump_boost".
+     */
+    static Integer amplifierFor(String worldName, String effectKey) {
+        PotionEffectType wanted = typeFor(effectKey);
+        Map<String, Integer> effects = WORLDS.get(worldName.toLowerCase(Locale.ROOT));
+        if (wanted == null || effects == null) {
+            return null;
+        }
+        for (Map.Entry<String, Integer> entry : effects.entrySet()) {
+            if (wanted.equals(typeFor(entry.getKey()))) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
     /** Resolves a friendly or real effect name to a potion effect type, or null. */
     static PotionEffectType typeFor(String key) {
         String k = key.toLowerCase(Locale.ROOT);

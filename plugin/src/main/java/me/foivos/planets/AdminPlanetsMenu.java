@@ -152,20 +152,34 @@ public final class AdminPlanetsMenu implements InventoryHolder {
             };
         }
 
+        boolean ownedByPlayer = planet.isOwned();
         ItemStack item = new ItemStack(icon);
         ItemMeta meta = item.getItemMeta();
-        meta.displayName(Component.text(planet.displayName()).color(NamedTextColor.AQUA)
+        // Which kind of planet this is comes first, in the item's own name: a
+        // head for one a player owns, a globe for a public one. The colour says
+        // the same thing, so a full page of them reads at a glance.
+        meta.displayName(Component.text((ownedByPlayer ? "\uD83D\uDC64 " : "\uD83C\uDF0D ")
+                        + planet.displayName())
+                .color(ownedByPlayer ? NamedTextColor.GOLD : NamedTextColor.AQUA)
                 .decoration(TextDecoration.ITALIC, false));
+        if (ownedByPlayer) {
+            // Player-owned planets also shimmer, which stands out even when the
+            // page is scrolled past quickly.
+            meta.setEnchantmentGlintOverride(true);
+        }
 
         World world = Bukkit.getWorld(planet.worldName());
         List<Component> lore = new ArrayList<>();
+        lore.add(ownedByPlayer
+                ? Component.text("\uD83C\uDFF7 Player-owned planet — "
+                                + plugin.adminOwnerName(planet.owned()))
+                        .color(NamedTextColor.GOLD)
+                        .decoration(TextDecoration.ITALIC, false)
+                : Component.text("\uD83C\uDFF7 Public planet — nobody owns it")
+                        .color(NamedTextColor.AQUA)
+                        .decoration(TextDecoration.ITALIC, false));
         lore.add(Component.text("World: " + planet.worldName()).color(NamedTextColor.GRAY)
                 .decoration(TextDecoration.ITALIC, false));
-        lore.add(planet.isOwned()
-                ? Component.text("Owned by " + plugin.adminOwnerName(planet.owned())).color(NamedTextColor.GOLD)
-                        .decoration(TextDecoration.ITALIC, false)
-                : Component.text("Public planet (/p)").color(NamedTextColor.GRAY)
-                        .decoration(TextDecoration.ITALIC, false));
         if (planet.owned() != null) {
             lore.add(Component.text("Size " + MyPlanetData.sizeName(planet.owned()
                             .upgradeLevel(MyPlanetData.Upgrade.PLANET_SIZE))
@@ -207,8 +221,15 @@ public final class AdminPlanetsMenu implements InventoryHolder {
         meta.displayName(Component.text("Planet Admin").color(NamedTextColor.GOLD)
                 .decoration(TextDecoration.ITALIC, false));
         List<Component> lore = new ArrayList<>();
-        lore.add(Component.text(planets.size() + " planet(s) · " + owned + " player-owned")
+        lore.add(Component.text(planets.size() + " planet(s) · " + owned + " player-owned · "
+                        + (planets.size() - owned) + " public")
                 .color(NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false));
+        lore.add(Component.text("\uD83D\uDC64 player-owned  \u00B7  \uD83C\uDF0D public")
+                .color(NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false));
+        lore.add(Component.text("Player-owned planets are named in gold and shimmer;")
+                .color(NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false));
+        lore.add(Component.text("public ones are named in aqua and stay plain.")
+                .color(NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false));
         lore.add(Component.text("Sorted: player-owned first, then public").color(NamedTextColor.GRAY)
                 .decoration(TextDecoration.ITALIC, false));
         lore.add(Component.text("Use the Dashboard for server-wide numbers")

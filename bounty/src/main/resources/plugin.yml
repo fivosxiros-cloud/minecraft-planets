@@ -1,0 +1,33 @@
+name: bounty
+version: '${version}'
+description: Player bounties — put money on someone, claim it by winning the fight.
+main: me.foivos.bounty.BountyPlugin
+api-version: '26.1.2'
+# Vault for the money, Planets for the /settings page the notification switches
+# live on. Both optional: without Vault the plugin explains itself and does
+# nothing, and without Planets the settings fall back to this plugin's config.
+softdepend: [Vault, planets]
+
+commands:
+  bounty:
+    description: The bounty board — place, check, list and claim bounties
+    usage: /bounty [add <player> <amount>] [check <player>] [list] [reload]
+    aliases: [b, bounties]
+    permission: bounty.use
+
+permissions:
+  bounty.use:
+    description: Allows opening the bounty board with /bounty, /b or /bounties
+    default: true
+  bounty.add:
+    description: Allows placing and adding to bounties with /bounty add
+    default: true
+  bounty.list:
+    description: Allows listing players with bounties with /bounty list
+    default: true
+  bounty.check:
+    description: Allows checking one player's bounty with /bounty check
+    default: true
+  bounty.admin:
+    description: Bypasses the minimum/maximum bounty limits and the anti-abuse cooldown
+    default: op

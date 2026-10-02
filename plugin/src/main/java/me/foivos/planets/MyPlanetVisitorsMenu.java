@@ -64,8 +64,9 @@ public final class MyPlanetVisitorsMenu implements InventoryHolder {
     public void handleClick(InventoryClickEvent event) {
         event.setCancelled(true);
         if (!(event.getWhoClicked() instanceof Player player)) return;
-        if (!data.canManage(player.getUniqueId())) {
-            player.sendMessage(Component.text("Only the owner or co-owner can kick visitors.").color(NamedTextColor.RED));
+        if (!plugin.canKickVisitors(data, player)) {
+            player.sendMessage(Component.text("Only the owner, co-owner, or a member with the "
+                    + "Kick Visitors permission can kick visitors.").color(NamedTextColor.RED));
             return;
         }
         int slot = event.getRawSlot();

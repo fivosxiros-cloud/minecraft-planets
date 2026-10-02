@@ -102,6 +102,16 @@ commands:
     description: Opens the friends menu (online first, favorites, requests, search, activity)
     usage: /friends [requests|activity|settings|search <name>]
     permission: planets.friends
+  music:
+    description: Play any vanilla song on demand, with your own looping playlists
+    usage: /music [<playlist>|play <song>|playlists|next|stop|help]
+    permission: planets.music
+    aliases: [songs, playlists]
+  ship:
+    description: Board your ship, fly it between planets and dock to land - or ride along in someone else's
+    usage: /ship [fly [planet]|chart|invite <player>|ride [player]|leave|edit|pads|rebuild]
+    permission: planets.ship
+    aliases: [spaceship, starchart]
   cards:
     description: Opens the Entity Card Hunt (collection, event info, leaderboard, timer)
     usage: /cards [collection|info|leaderboard|timer]
@@ -111,6 +121,14 @@ commands:
     description: Sets how much longer the Entity Card Hunt runs
     usage: /cardeventduration set <hours> | /cardeventduration info
     permission: planets.cards.admin
+  casino:
+    description: Opens the casino hub of free, cosmetic-prize games
+    usage: /casino [stats|reload|info]
+    permission: planets.casino.use
+  gambling:
+    description: Opens the casino hub (the same screen /casino opens)
+    usage: /gambling
+    permission: planets.casino.use
 
 permissions:
   planets.use:
@@ -170,9 +188,24 @@ permissions:
   planets.friends:
     description: Allows using /friend and /friends (friends, requests, gifts and the social settings)
     default: true
+  planets.music:
+    description: Allows using /music to play songs and manage personal playlists
+    default: true
   planets.cards:
     description: Allows opening the Entity Card Hunt with /cards and /c
     default: true
   planets.cards.admin:
     description: Allows changing the Entity Card Hunt's end time with /cardeventduration
+    default: op
+  planets.casino.use:
+    description: Allows opening the casino hub with /casino or /gambling
+    default: true
+  planets.casino.stats:
+    description: Allows opening your own casino record with /casino stats
+    default: true
+  planets.casino.reload:
+    description: Allows re-reading the casino section with /casino reload
+    default: op
+  planets.casino.admin:
+    description: Allows administering the casino (accepted wherever reload is)
     default: op

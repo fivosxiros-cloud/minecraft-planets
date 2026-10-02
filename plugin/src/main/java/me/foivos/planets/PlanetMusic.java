@@ -188,7 +188,7 @@ final class PlanetMusic {
     }
 
     /** Resolves a configured sound name ({@code MUSIC_END}, {@code music.end}, {@code music_end}). */
-    private static Sound sound(String name) {
+    static Sound sound(String name) {
         if (name == null || name.isBlank()) {
             return null;
         }
@@ -223,6 +223,13 @@ final class PlanetMusic {
             }
             if (pluginWorlds == null) {
                 pluginWorlds = plugin.pluginWorldNames();
+            }
+            // Personal music (/music) has the stage: the soundtrack never starts
+            // over a song or playlist the player asked for, and a Stop in /music
+            // keeps the soundtrack quiet until the player moves on.
+            if (plugin.personalMusicPlaying(player) || plugin.personalMusicSilenced(player)) {
+                stop(player); // no-op unless a planet track was running
+                continue;
             }
             String key = world.getName().toLowerCase(Locale.ROOT);
             List<Track> list = tracksFor(key, pluginWorlds);

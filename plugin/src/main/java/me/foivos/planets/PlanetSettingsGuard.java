@@ -42,7 +42,14 @@ import java.util.Set;
  *   <li>{@code Visitor Access} — players who aren't members can't teleport in.</li>
  *   <li>{@code Public} — only members can enter at all when set to private.</li>
  * </ul>
- * Ownership/planets data is read live on every event, so toggling a setting
+ * On top of those planet-wide switches, an owner can set per-player
+ * permissions for each member ({@code /myp → Members → shift-click}). The
+ * restrictions (Build, Containers, Doors, Item Drops) take an ability away from
+ * one member, while the hand-outs (Invite, Kick Visitors, PvP, Explosions) give
+ * one member something the planet does not allow by default — PvP needs it on
+ * both duelists, and Explosions only ever apply to TNT with a player behind it.
+ *
+ * <p>Ownership/planets data is read live on every event, so toggling a setting
  * takes effect immediately without a restart.
  */
 public final class PlanetSettingsGuard implements Listener {
@@ -62,11 +69,20 @@ public final class PlanetSettingsGuard implements Listener {
         if (attacker == null || attacker.equals(victim)) return;
         MyPlanetData data = plugin.getMyPlanetManager().get(victim.getWorld().getName());
         if (data == null || data.pvpEnabled()) return;
+        // PvP is off planet-wide, but two members who both hold the PvP
+        // permission may still duel: the grant is opt-in on both sides.
+        if (mayDuel(data, attacker) && mayDuel(data, victim)) return;
         event.setCancelled(true);
         if (attacker.isOnline()) {
             attacker.sendMessage(net.kyori.adventure.text.Component.text("PvP is disabled on this planet.")
                     .color(net.kyori.adventure.text.format.NamedTextColor.RED));
         }
+    }
+
+    /** A member with the per-player PvP permission — both duelists need it. */
+    private static boolean mayDuel(MyPlanetData data, Player player) {
+        return data.isMember(player.getUniqueId())
+                && data.permission(player.getUniqueId(), MyPlanetData.Permission.PVP);
     }
 
     /**
@@ -108,6 +124,10 @@ public final class PlanetSettingsGuard implements Listener {
                     .color(net.kyori.adventure.text.format.NamedTextColor.RED));
             return;
         }
+        if (!mayBuild(data, player)) {
+            event.setCancelled(true);
+            return;
+        }
         // Decrement block count when a placed block is broken.
         data.decrementBlockCount(player.getUniqueId());
     }
@@ -122,6 +142,10 @@ public final class PlanetSettingsGuard implements Listener {
             event.setCancelled(true);
             player.sendMessage(net.kyori.adventure.text.Component.text("Building is disabled on this planet.")
                     .color(net.kyori.adventure.text.format.NamedTextColor.RED));
+            return;
+        }
+        if (!mayBuild(data, player)) {
+            event.setCancelled(true);
             return;
         }
         // Block Limitations: check the planet-wide placement cap (shared by all players).
@@ -143,6 +167,23 @@ public final class PlanetSettingsGuard implements Listener {
         }
         // Increment block count on successful placement.
         data.incrementBlockCount(player.getUniqueId());
+    }
+
+    /**
+     * The per-player Build permission: members whose owner switched it off
+     * can't break or place blocks, while everyone else keeps the planet-wide
+     * behaviour of the global Build toggle. The owner always keeps it.
+     */
+    private static boolean mayBuild(MyPlanetData data, Player player) {
+        if (!data.isMember(player.getUniqueId())) {
+            return true;
+        }
+        if (data.permission(player.getUniqueId(), MyPlanetData.Permission.BUILD)) {
+            return true;
+        }
+        player.sendMessage(net.kyori.adventure.text.Component.text("You don't have the Build permission on this planet.")
+                .color(net.kyori.adventure.text.format.NamedTextColor.RED));
+        return false;
     }
 
     // ── Mob Spawning ───────────────────────────────────────────────────
@@ -167,9 +208,15 @@ public final class PlanetSettingsGuard implements Listener {
         MyPlanetData data = plugin.getMyPlanetManager().get(event.getEntity() != null
                 ? event.getEntity().getWorld().getName() : "");
         if (data == null) return;
-        if (!data.explosions() && !event.blockList().isEmpty()) {
-            event.blockList().clear(); // keep the explosion, protect the blocks
+        if (data.explosions() || event.blockList().isEmpty()) return;
+        // TNT lit by a member who was granted the Explosions permission still
+        // damages blocks while the planet-wide toggle is off.
+        Player source = event.getEntity() == null ? null : resolveAttacker(event.getEntity());
+        if (source != null && data.isMember(source.getUniqueId())
+                && data.permission(source.getUniqueId(), MyPlanetData.Permission.EXPLOSIONS)) {
+            return;
         }
+        event.blockList().clear(); // keep the explosion, protect the blocks
     }
 
     // ── Fire Spread ────────────────────────────────────────────────────
@@ -211,21 +258,44 @@ public final class PlanetSettingsGuard implements Listener {
 
     @EventHandler(ignoreCancelled = true, priority = EventPriority.HIGH)
     public void onItemDrop(PlayerDropItemEvent event) {
-        MyPlanetData data = plugin.getMyPlanetManager().get(event.getPlayer().getWorld().getName());
-        if (data == null || data.itemDrops()) return;
-        event.setCancelled(true);
-        event.getPlayer().updateInventory();
-        event.getPlayer().sendMessage(net.kyori.adventure.text.Component.text("Item drops are disabled on this planet.")
-                .color(net.kyori.adventure.text.format.NamedTextColor.RED));
+        Player player = event.getPlayer();
+        MyPlanetData data = plugin.getMyPlanetManager().get(player.getWorld().getName());
+        if (data == null) return;
+        if (!data.itemDrops()) {
+            // The planet-wide lockout: nobody drops anything.
+            event.setCancelled(true);
+            player.updateInventory();
+            player.sendMessage(net.kyori.adventure.text.Component.text("Item drops are disabled on this planet.")
+                    .color(net.kyori.adventure.text.format.NamedTextColor.RED));
+            return;
+        }
+        if (!mayDropItems(data, player)) {
+            event.setCancelled(true);
+            player.updateInventory();
+            player.sendMessage(net.kyori.adventure.text.Component.text(
+                            "You don't have the Item Drops permission on this planet.")
+                    .color(net.kyori.adventure.text.format.NamedTextColor.RED));
+        }
     }
 
-    /** No picking items up off the ground while Item Drops is OFF. */
+    /**
+     * No picking items up off the ground while Item Drops is OFF, and no
+     * dropping or picking up for a member the owner denied it to.
+     */
     @EventHandler(ignoreCancelled = true, priority = EventPriority.HIGH)
     public void onItemPickup(EntityPickupItemEvent event) {
         if (!(event.getEntity() instanceof Player player)) return;
         MyPlanetData data = plugin.getMyPlanetManager().get(player.getWorld().getName());
-        if (data == null || data.itemDrops()) return;
-        event.setCancelled(true);
+        if (data == null) return;
+        if (!data.itemDrops() || !mayDropItems(data, player)) {
+            event.setCancelled(true);
+        }
+    }
+
+    /** The per-player Item Drops restriction (members only; everyone else is unchanged). */
+    private static boolean mayDropItems(MyPlanetData data, Player player) {
+        return !data.isMember(player.getUniqueId())
+                || data.permission(player.getUniqueId(), MyPlanetData.Permission.ITEM_DROPS);
     }
 
     /** No scattering items on the ground when the player dies. */
@@ -255,11 +325,31 @@ public final class PlanetSettingsGuard implements Listener {
         if (block == null) return;
         MyPlanetData data = plugin.getMyPlanetManager().get(block.getWorld().getName());
         if (data == null) return;
-        if (data.chestDoorAccess()) return; // toggle ON → everything allowed
         org.bukkit.Material type = block.getType();
         boolean isChestOrContainer = CHEST_MATERIALS.contains(type);
         boolean isDoorOrGate = DOOR_MATERIALS.contains(type);
         if (!isChestOrContainer && !isDoorOrGate) return;
+        // Per-player overrides come first, so an owner can lock one member out
+        // of the chests while the planet-wide toggle stays open (and the other
+        // way around the global toggle still applies to everyone).
+        if (data.isMember(player.getUniqueId())) {
+            if (isChestOrContainer
+                    && !data.permission(player.getUniqueId(), MyPlanetData.Permission.CONTAINERS)) {
+                event.setCancelled(true);
+                player.sendMessage(net.kyori.adventure.text.Component.text(
+                                "You don't have the Containers permission on this planet.")
+                        .color(net.kyori.adventure.text.format.NamedTextColor.RED));
+                return;
+            }
+            if (isDoorOrGate && !data.permission(player.getUniqueId(), MyPlanetData.Permission.DOORS)) {
+                event.setCancelled(true);
+                player.sendMessage(net.kyori.adventure.text.Component.text(
+                                "You don't have the Doors permission on this planet.")
+                        .color(net.kyori.adventure.text.format.NamedTextColor.RED));
+                return;
+            }
+        }
+        if (data.chestDoorAccess()) return; // toggle ON → everything allowed
         // Toggle OFF — block the interaction on both hands so it can't slip
         // through via the off-hand event.
         event.setCancelled(true);
@@ -327,8 +417,10 @@ public final class PlanetSettingsGuard implements Listener {
     // ── Visitor Access / Public ────────────────────────────────────────
 
     /**
-     * Non-members can't teleport into a planet that has Visitor Access off
-     * or is set to private. Members (any role) and the owner always get in.
+     * Non-members can't teleport into a planet that has Visitor Access off or
+     * is set to private — not even with a {@code planets.tp.<world>} grant,
+     * which only unlocks the admin-locked public planets. Members (any role)
+     * and the owner always get in.
      */
     @EventHandler(ignoreCancelled = true, priority = EventPriority.HIGH)
     public void onTeleportIn(PlayerTeleportEvent event) {
@@ -341,10 +433,11 @@ public final class PlanetSettingsGuard implements Listener {
         if (data == null) return;
         Player player = event.getPlayer();
         if (data.isMember(player.getUniqueId())) return;
-        if (data.visitorAccess() && data.isPublic()) return;
-        if (player.hasPermission("planets.tp." + target.getName().toLowerCase(java.util.Locale.ROOT))) return;
+        if (data.isPublic() && data.visitorAccess()) return;
         event.setCancelled(true);
-        player.sendMessage(net.kyori.adventure.text.Component.text("This planet is private — only members can enter.")
+        player.sendMessage(net.kyori.adventure.text.Component.text(data.isPublic()
+                        ? "Visitors can't enter this planet right now — only members can."
+                        : "This planet is private — only members can enter.")
                 .color(net.kyori.adventure.text.format.NamedTextColor.RED));
     }
 }

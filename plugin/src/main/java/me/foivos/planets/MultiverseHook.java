@@ -2,26 +2,24 @@ package me.foivos.planets;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
-import org.bukkit.command.CommandSender;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.Plugin;
 
 import java.io.File;
 import java.io.IOException;
-import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
-import java.util.Optional;
 
 /**
- * Reads the world list from Multiverse-Core without any compile-time dependency
- * on it, so this plugin can never throw a {@code NoClassDefFoundError} when
- * Multiverse is missing or a different version is installed.
+ * Multiverse-Core support that has to keep working whatever version is installed.
  * <p>
- * Supports both Multiverse-Core 5.x ({@code org.mvplugins.multiverse.core})
- * and the older 4.x ({@code com.onarandombox.multiversecore}) APIs.
+ * Reading the world list stays reflective on purpose, so an old Multiverse 4.x
+ * server still lists its worlds here instead of showing an empty planet menu.
+ * Everything that <i>changes</i> worlds lives in {@link MultiverseWorlds}, which
+ * calls Multiverse's own API — a command line can only report a failure to the
+ * console, which is how a mistyped flag once made every new planet fail quietly.
  */
 final class MultiverseHook {
 
@@ -53,12 +51,11 @@ final class MultiverseHook {
     }
 
     /**
-     * Makes Multiverse forget a world for good. Unloading a world leaves its
-     * entry in Multiverse's own world list, so on the next restart Multiverse
-     * re-creates it (empty) and the "deleted" planet shows up in the menus
-     * again. This removes the entry through the Multiverse API when it is
-     * available, falls back to Multiverse's own commands, and finally strips the
-     * world out of Multiverse's config file so nothing can resurrect it.
+     * Makes Multiverse forget a world for good. Unloading a world leaves its entry
+     * in Multiverse's own world list, so on the next restart Multiverse re-creates
+     * it (empty) and the "deleted" planet shows up in the menus again. This removes
+     * that entry through Multiverse's API and then strips the world out of
+     * Multiverse's own config file, so nothing can resurrect it.
      *
      * @return whether Multiverse (or at least its config) no longer knows the world.
      */
@@ -66,126 +63,22 @@ final class MultiverseHook {
         if (worldName == null || worldName.isBlank() || !isPresent()) {
             return false;
         }
-        boolean forgotten = false;
-        try {
-            forgotten = forgetViaApi(worldName);
-        } catch (ReflectiveOperationException | RuntimeException ex) {
-            Bukkit.getLogger().warning("[planets] Could not remove '" + worldName
-                    + "' from Multiverse's world list: " + ex.getMessage());
-        }
-        if (!forgotten) {
-            forgotten = forgetViaCommands(worldName);
-        }
+        MultiverseWorlds.Outcome removed = MultiverseWorlds.forget(worldName);
         boolean cleaned = stripFromConfig(worldName);
-        if (forgotten || cleaned) {
-            Bukkit.getLogger().info("[planets] Multiverse now ignores '" + worldName
-                    + "' — the deleted world can't come back on the next restart.");
+        if (removed.ok()) {
+            Bukkit.getLogger().info("[planets] Multiverse no longer knows '" + worldName + "'.");
         } else {
-            Bukkit.getLogger().warning("[planets] Could not make Multiverse forget '" + worldName
-                    + "' — remove it there manually if it reappears (e.g. /mv delete " + worldName + ").");
+            Bukkit.getLogger().warning("[planets] Could not remove '" + worldName
+                    + "' from Multiverse's world list (" + removed.detail() + ").");
         }
-        return forgotten || cleaned;
-    }
-
-    private static boolean forgetViaApi(String worldName) throws ReflectiveOperationException {
-        return tryForget5(worldName) || tryForget4(worldName);
-    }
-
-    /** Multiverse 5.x: {@code WorldManager#deleteWorld(MVWorld)} / {@code #removeWorld(MVWorld)}. */
-    private static boolean tryForget5(String worldName) throws ReflectiveOperationException {
-        Class<?> apiClass;
-        try {
-            apiClass = Class.forName("org.mvplugins.multiverse.core.MultiverseCoreApi");
-        } catch (ClassNotFoundException notFive) {
-            return false;
+        if (cleaned) {
+            Bukkit.getLogger().info("[planets] Dropped '" + worldName + "' from Multiverse's worlds.yml too.");
         }
-        if (!(boolean) apiClass.getMethod("isLoaded").invoke(null)) {
-            return false;
+        if (!removed.ok() && !cleaned) {
+            Bukkit.getLogger().warning("[planets] Multiverse may still remember '" + worldName
+                    + "' — it would come back empty on the next restart.");
         }
-        Object api = apiClass.getMethod("get").invoke(null);
-        Object worldManager = api.getClass().getMethod("getWorldManager").invoke(api);
-        Object world = findWorld(worldManager, worldName);
-        if (world == null) {
-            return false;
-        }
-        return invokeSingleArg(worldManager, world, "deleteWorld")
-                || invokeSingleArg(worldManager, world, "removeWorld");
-    }
-
-    /** Multiverse 4.x: {@code MVWorldManager#deleteWorld(String)} / {@code #removeWorld(String)}. */
-    private static boolean tryForget4(String worldName) throws ReflectiveOperationException {
-        Plugin plugin = Bukkit.getPluginManager().getPlugin("Multiverse-Core");
-        if (plugin == null) {
-            return false;
-        }
-        Object worldManager;
-        try {
-            worldManager = plugin.getClass().getMethod("getMVWorldManager").invoke(plugin);
-        } catch (NoSuchMethodException notFour) {
-            return false;
-        }
-        return invokeSingleArg(worldManager, worldName, "deleteWorld")
-                || invokeSingleArg(worldManager, worldName, "removeWorld");
-    }
-
-    /** Calls {@code methodName(argument)} on the target, whatever the version's signature is. */
-    private static boolean invokeSingleArg(Object target, Object argument, String methodName) {
-        for (Method method : target.getClass().getMethods()) {
-            if (!method.getName().equals(methodName) || method.getParameterCount() != 1) {
-                continue;
-            }
-            if (!method.getParameterTypes()[0].isInstance(argument)) {
-                continue;
-            }
-            try {
-                method.invoke(target, argument);
-                return true;
-            } catch (ReflectiveOperationException | RuntimeException ignored) {
-                // Try the next overload / fall back to the command path.
-            }
-        }
-        return false;
-    }
-
-    /** Looks a Multiverse world object up by name, unwrapping MV5's {@code Optional}. */
-    private static Object findWorld(Object worldManager, String worldName) {
-        for (Method method : worldManager.getClass().getMethods()) {
-            if (method.getParameterCount() != 1 || !method.getParameterTypes()[0].isInstance(worldName)) {
-                continue;
-            }
-            String name = method.getName().toLowerCase(Locale.ROOT);
-            if (!name.equals("getworld") && !name.equals("getworldbyname")) {
-                continue;
-            }
-            try {
-                Object result = method.invoke(worldManager, worldName);
-                if (result instanceof Optional<?> optional) {
-                    return optional.orElse(null);
-                }
-                if (result != null) {
-                    return result;
-                }
-            } catch (ReflectiveOperationException | RuntimeException ignored) {
-            }
-        }
-        return null;
-    }
-
-    /** Last-resort fallback: run Multiverse's own remove/delete commands. */
-    private static boolean forgetViaCommands(String worldName) {
-        CommandSender console = Bukkit.getConsoleSender();
-        boolean dispatched = false;
-        try {
-            dispatched = Bukkit.dispatchCommand(console, "mv remove " + worldName);
-        } catch (RuntimeException ignored) {
-        }
-        try {
-            // Multiverse asks for confirmation before deleting; answer it now.
-            dispatched |= Bukkit.dispatchCommand(console, "mv delete " + worldName);
-            dispatched |= Bukkit.dispatchCommand(console, "mv confirm");
-        } catch (RuntimeException ignored) {
-        }
-        return dispatched;
+        return removed.ok() || cleaned;
     }
 
     /**

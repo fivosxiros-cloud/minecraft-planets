@@ -1,5 +1,6 @@
 package me.foivos.planets;
 
+import me.foivos.planets.api.SettingToggle;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
@@ -42,6 +43,17 @@ public final class PlayerSettingsMenu implements InventoryHolder {
     /** Opens the Friends category page (the social toggles). */
     private static final int FRIENDS_SLOT = 49;
     private static final int CLOSE_SLOT = 51;
+    /**
+     * The boat item: the one choice that isn't a toggle. It sits in a spare slot
+     * of the last row and clicks through the boats.
+     */
+    private static final int BOAT_SLOT = 38;
+    /**
+     * Where the pages other plugins register sit: the spare slots of the bottom
+     * row, filled in the order they were registered (the bounty board's page is
+     * one of these, so it opens from /settings like any other screen).
+     */
+    private static final int[] PAGE_SLOTS = {46, 48, 50, 52};
     /**
      * Where the toggles sit, in order: four rows of seven. The current settings
      * fill three of them, so the last row is free for the next ones.
@@ -96,6 +108,15 @@ public final class PlayerSettingsMenu implements InventoryHolder {
             new FriendSettingsMenu(plugin, player, settings).open(player);
             return;
         }
+        List<ExternalSettings.Page> pages = plugin.externalSettings().pages();
+        for (int i = 0; i < pages.size() && i < PAGE_SLOTS.length; i++) {
+            if (PAGE_SLOTS[i] == slot) {
+                pendingReset = false;
+                player.closeInventory();
+                new ExternalSettingsMenu(plugin, player, pages.get(i)).open(player);
+                return;
+            }
+        }
         if (slot == RESET_SLOT) {
             if (!pendingReset) {
                 pendingReset = true;
@@ -115,6 +136,16 @@ public final class PlayerSettingsMenu implements InventoryHolder {
             plugin.planetMusic().stop(player);
             plugin.planetMusic().startNow(player);
             plugin.sidebarScoreboard().refresh(player);
+            refreshFlyingBoat(player);
+            render();
+            return;
+        }
+
+        if (slot == BOAT_SLOT) {
+            pendingReset = false;
+            settings.cycleBoatType(player.getUniqueId());
+            player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.8f, 1.4f);
+            refreshFlyingBoat(player);
             render();
             return;
         }
@@ -165,6 +196,11 @@ public final class PlayerSettingsMenu implements InventoryHolder {
         if (setting == PlayerSettings.Setting.NIGHT_VISION) {
             plugin.applyNightVision(player);
         }
+        // The ship is a real boat that can be restyled where it flies, so a
+        // banner switched here is taken up at once rather than at the next flight.
+        if (setting == PlayerSettings.Setting.SHIP_BANNER) {
+            refreshFlyingBoat(player);
+        }
         // Music is played by the soundtrack, so it has to stop (or start) right
         // away rather than at the next pass of its scheduler.
         if (setting == PlayerSettings.Setting.MUSIC) {
@@ -185,14 +221,24 @@ public final class PlayerSettingsMenu implements InventoryHolder {
 
         PlayerSettings.Setting[] all = GENERAL_SETTINGS;
         for (int i = 0; i < all.length && i < TOGGLE_SLOTS.length; i++) {
+            if (TOGGLE_SLOTS[i] == BOAT_SLOT) {
+                plugin.getLogger().warning("The /settings menu has run into the boat item: "
+                        + all[i].name() + " has no room left.");
+                continue;
+            }
             inventory.setItem(TOGGLE_SLOTS[i], toggleItem(plugin, viewer, settings, all[i]));
         }
         if (all.length > TOGGLE_SLOTS.length) {
             plugin.getLogger().warning("The /settings menu has room for " + TOGGLE_SLOTS.length
                     + " toggles but " + all.length + " exist.");
         }
+        inventory.setItem(BOAT_SLOT, boatItem());
 
         inventory.setItem(FRIENDS_SLOT, friendsCategoryItem());
+        List<ExternalSettings.Page> pages = plugin.externalSettings().pages();
+        for (int i = 0; i < pages.size() && i < PAGE_SLOTS.length; i++) {
+            inventory.setItem(PAGE_SLOTS[i], pageItem(pages.get(i)));
+        }
         inventory.setItem(RESET_SLOT, pendingReset ? resetConfirmItem() : resetItem());
 
         ItemStack close = new ItemStack(Material.BARRIER);
@@ -214,12 +260,49 @@ public final class PlayerSettingsMenu implements InventoryHolder {
         lore.add(line("set until you switch them back."));
         lore.add(line(""));
         lore.add(line(PlayerSettings.Setting.values().length + " settings available"));
-        lore.add(line("Grouped into Global and 👥 Friends"));
+        int pages = plugin.externalSettings().pages().size();
+        lore.add(line(pages == 0
+                ? "Grouped into Global and 👥 Friends"
+                : "Global, 👥 Friends and " + pages + " added page(s)"));
         lore.add(line(changed == 0
                         ? "All settings are at their defaults"
                         : changed + " setting(s) changed from the default",
                 changed == 0 ? NamedTextColor.GREEN : NamedTextColor.YELLOW));
         lore.add(Component.text("Click a toggle to switch it").color(NamedTextColor.DARK_GRAY)
+                .decoration(TextDecoration.ITALIC, false));
+        meta.lore(lore);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    /**
+     * The button that opens a page another plugin registered (a bounty board's
+     * notifications, for instance). The switches themselves live on that page,
+     * drawn by {@link ExternalSettingsMenu}.
+     */
+    private ItemStack pageItem(ExternalSettings.Page page) {
+        ItemStack item = page.spec().icon().clone();
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text("\uD83E\uDDFE " + page.spec().displayName())
+                .color(NamedTextColor.AQUA).decoration(TextDecoration.ITALIC, false));
+        List<Component> lore = new ArrayList<>();
+        if (!page.spec().description().isBlank()) {
+            lore.add(line(page.spec().description()));
+        }
+        int changed = 0;
+        for (SettingToggle toggle : page.toggles()) {
+            if (page.value(viewer.getUniqueId(), toggle.key()) != toggle.defaultOn()) {
+                changed++;
+            }
+        }
+        lore.add(line(page.toggles().size() + " setting(s) from " + page.spec().pluginName(),
+                NamedTextColor.DARK_GRAY));
+        lore.add(line(changed == 0
+                        ? "All at their defaults"
+                        : changed + " changed from the default",
+                changed == 0 ? NamedTextColor.GREEN : NamedTextColor.YELLOW));
+        lore.add(line(""));
+        lore.add(Component.text("Click to open this page").color(NamedTextColor.YELLOW)
                 .decoration(TextDecoration.ITALIC, false));
         meta.lore(lore);
         item.setItemMeta(meta);
@@ -290,7 +373,7 @@ public final class PlayerSettingsMenu implements InventoryHolder {
             SidebarScoreboard bar = plugin.sidebarScoreboard();
             lore.add(line("Showing " + bar.visibleLines(viewer).size() + " of "
                     + bar.lines().size() + " lines", NamedTextColor.YELLOW));
-            lore.add(Component.text("Right-click to pick the lines")
+            lore.add(Component.text("Right-click to pick the lines and their colours")
                     .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
             if (!bar.enabled()) {
                 lore.add(line("Switched off on this server", NamedTextColor.DARK_RED));
@@ -309,6 +392,45 @@ public final class PlayerSettingsMenu implements InventoryHolder {
         meta.lore(lore);
         item.setItemMeta(meta);
         return item;
+    }
+
+    /**
+     * The player's boat: what their ship looks like flying in space. One click
+     * switches to the other boat (there are only two), and the banner is its own
+     * toggle in the list above.
+     */
+    private ItemStack boatItem() {
+        PlayerSettings.BoatType type = settings.boatType(viewer.getUniqueId());
+        boolean banner = settings.get(viewer.getUniqueId(), PlayerSettings.Setting.SHIP_BANNER);
+        ItemStack item = new ItemStack(type.icon());
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text("\uD83D\uDEA4 Your Boat: " + type.displayName())
+                .color(NamedTextColor.AQUA).decoration(TextDecoration.ITALIC, false));
+        List<Component> lore = new ArrayList<>();
+        lore.add(line("The ship you fly in space is your boat"));
+        lore.add(line("Type: " + type.displayName() + " - " + type.description(),
+                NamedTextColor.YELLOW));
+        lore.add(line("Banner: " + (banner ? "flying at the stern" : "no banner"),
+                NamedTextColor.YELLOW));
+        lore.add(line(""));
+        lore.add(Component.text("Click to switch to the " + type.next().displayName())
+                .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
+        lore.add(line("Banner on/off: the Boat Banner toggle", NamedTextColor.DARK_GRAY));
+        lore.add(line("Changes your ship right away - even in flight", NamedTextColor.DARK_GRAY));
+        meta.lore(lore);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    /**
+     * Applies a boat or banner change to a ship that is flying right now, so
+     * {@code /settings} restyles the ship where it is instead of at take-off.
+     */
+    private void refreshFlyingBoat(Player player) {
+        ShipPilot pilot = plugin.shipPilot();
+        if (pilot != null) {
+            pilot.refreshBoat(player);
+        }
     }
 
     private ItemStack resetItem() {

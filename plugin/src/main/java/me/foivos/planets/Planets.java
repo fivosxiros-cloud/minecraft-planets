@@ -40,8 +40,16 @@ import org.bukkit.event.player.PlayerChangedWorldEvent;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerMoveEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.world.WorldLoadEvent;
 import io.papermc.paper.event.player.AsyncChatEvent;
+import me.foivos.planets.api.PlanetariumHudService;
+import me.foivos.planets.casino.CasinoCommand;
+import me.foivos.planets.casino.CasinoListener;
+import me.foivos.planets.casino.CasinoManager;
+import me.foivos.planets.casino.CasinoScreen;
 import org.bukkit.permissions.PermissionAttachmentInfo;
+import org.bukkit.plugin.RegisteredServiceProvider;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 import org.bukkit.scheduler.BukkitTask;
@@ -92,12 +100,20 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     /** Every player's personal preferences (player-settings.yml, /settings). */
     private PlayerSettings playerSettings;
+    /**
+     * The {@code /settings} pages other plugins register (the bounty board, for
+     * one), served to them as a Bukkit service.
+     */
+    private final ExternalSettings externalSettings = new ExternalSettings(this);
     /** Every player's /home locations (homes.yml). */
     private HomeManager homeManager;
     /** uuid -> the /home chat prompt waiting for that player's next message. */
     private final Map<UUID, HomePrompt> pendingHomePrompts = new HashMap<>();
     /** uuid -> the HUD line whose label the player is typing in chat; -1 = a new line. */
     private final Map<UUID, Integer> pendingHudNames = new HashMap<>();
+
+    /** A playlist whose new name is waiting in chat (the /music rename prompt). */
+    private final Map<UUID, String> pendingPlaylistRenames = new HashMap<>();
 
     /** A pending /home prompt: what the player's next chat message means. */
     private record HomePrompt(boolean rename, String homeName, Location location) {
@@ -259,6 +275,27 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     /** Routing for {@code /cards}, {@code /c} and {@code /cardeventduration}. */
     private CardsCommand cardsCommand;
 
+    /** The Casino: its games, records, prizes and achievements (casino.yml). */
+    private CasinoManager casino;
+    /** Routing for {@code /casino} and {@code /gambling}. */
+    private CasinoCommand casinoCommand;
+
+    /** Personal music (/music): on-demand songs and small playlists (player-music.yml). */
+    private PlayerMusic playerMusic;
+
+    /** Space travel: the ship, the star chart and the fog of war (/ship). */
+    private SpaceTravel spaceTravel;
+
+    /** The space world itself: the ship and one landing pad per planet. */
+    private SpaceWorld spaceWorld;
+
+    /** The piloting sessions: players flying their ship right now. */
+    private ShipPilot shipPilot;
+
+    /** Keeps the space world's ship and pads intact, and remembers who is
+     * allowed to edit them ({@code /ship edit}). */
+    private SpaceGuard spaceGuard;
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
@@ -274,23 +311,52 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
         environment.start(this);
         getServer().getPluginManager().registerEvents(environment, this);
+        // Nothing but this plugin remembers the spawn limits an admin set (Bukkit
+        // keeps them in memory), and Multiverse loads its worlds while enabling —
+        // so put the saved ones back once the server has finished starting up.
+        getServer().getScheduler().runTaskLater(this, () -> {
+            for (World loaded : Bukkit.getWorlds()) {
+                restoreSpawnLimits(loaded);
+            }
+        }, 60L);
 
         // Initialize the planet ownership manager BEFORE registering guards that read from it.
         this.myPlanetManager = new MyPlanetManager(this);
         this.playerSettings = new PlayerSettings(this);
         this.homeManager = new HomeManager(this);
+        // Publish the settings menu as a service, so a plugin that soft-depends
+        // on this one can add a page of its own switches to /settings instead of
+        // shipping a second settings system. It is registered here, before any
+        // plugin that depends on this one enables, so the lookup always works.
+        getServer().getServicesManager().register(
+                me.foivos.planets.api.PlanetariumSettingsService.class,
+                externalSettings, this, ServicePriority.Normal);
         // The optional action-bar HUD needs both the settings and the planet data.
         pushHudDefault();
         startPlanetHud();
         // The soundtrack needs the same planet and lobby lists the HUD uses.
         music.loadConfig(getConfig());
         music.start(this);
+        // Personal music (/music): songs on demand and small playlists, stored
+        // per player in player-music.yml.
+        this.playerMusic = new PlayerMusic(this);
+        playerMusic.loadConfig(getConfig());
+        playerMusic.start(this);
+        this.spaceTravel = new SpaceTravel(this);
+        spaceTravel.loadConfig(getConfig());
+        this.spaceWorld = new SpaceWorld(this);
+        spaceWorld.loadConfig(getConfig());
+        this.shipPilot = new ShipPilot(this, spaceWorld);
         // The sidebar is per player, so it draws for everyone who wants it.
         if (sidebar.loadConfig(getConfig())) {
-            // config.yml had no sidebar section yet — keep the written one.
+            // config.yml had no sidebar section yet, or was missing the lines
+            // that have joined the board since — keep what was written.
             saveConfigQuietly();
         }
         sidebar.start();
+        if (sidebar.finePadding()) {
+            prepareSidebarPack();
+        }
 
         // Worlds are only all in place once every plugin has enabled (Multiverse
         // loads its own), so the safety-net terrain pass runs a few seconds later.
@@ -298,6 +364,12 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
         // Enforces /myp → Settings toggles (PvP, build, spawning, fire, access...).
         getServer().getPluginManager().registerEvents(new PlanetSettingsGuard(this), this);
+        // Keeps players inside a planet's border: an ender pearl thrown across
+        // it lands back on the spot the thrower was standing on.
+        getServer().getPluginManager().registerEvents(new PlanetBorderGuard(this), this);
+        // The space world's ship, pads and holo labels are the plugin's own work.
+        this.spaceGuard = new SpaceGuard(this);
+        getServer().getPluginManager().registerEvents(spaceGuard, this);
         // Stops players running risky Essentials/Vault commands (gamemode, give,
         // tp, eco give, invsee...). Staff bypass it with the configured permission.
         getServer().getPluginManager().registerEvents(new CommandGuard(this), this);
@@ -360,12 +432,26 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 extraCommand.setTabCompleter(this);
             }
         }
+        // /music: personal songs and their playlists.
+        org.bukkit.command.PluginCommand musicCommand = getCommand("music");
+        if (musicCommand != null) {
+            musicCommand.setExecutor(this);
+            musicCommand.setTabCompleter(this);
+        }
         // /cards (alias /c) and the admin /cardeventduration.
         for (String commandName : List.of("cards", "cardeventduration")) {
             org.bukkit.command.PluginCommand extraCommand = getCommand(commandName);
             if (extraCommand != null) {
                 extraCommand.setExecutor(this);
                 extraCommand.setTabCompleter(this);
+            }
+        }
+        // /casino and /gambling both open the casino hub.
+        for (String commandName : List.of("casino", "gambling")) {
+            org.bukkit.command.PluginCommand casinoCmd = getCommand(commandName);
+            if (casinoCmd != null) {
+                casinoCmd.setExecutor(this);
+                casinoCmd.setTabCompleter(this);
             }
         }
 
@@ -386,11 +472,31 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         getServer().getPluginManager().registerEvents(new CardDropListener(cardService), this);
         cardService.start();
 
+        // The Casino: a hub of free games that pay only in cosmetic prizes. It
+        // owns its own registry, so a new game is one class and one
+        // registerGame call rather than an edit here.
+        this.casino = new CasinoManager(this);
+        this.casinoCommand = new CasinoCommand(casino);
+        getServer().getPluginManager().registerEvents(new CasinoListener(), this);
+
         // Hook into Vault economy.
         setupEconomy();
         getServer().getPluginManager().registerEvents(new Listener() {
             @EventHandler
+            public void onWorldLoad(WorldLoadEvent event) {
+                // Per-world spawn limits live in memory only, so the world that was
+                // just loaded gets the ones an admin saved for it back.
+                restoreSpawnLimits(event.getWorld());
+            }
+
+            @EventHandler
             public void onInventoryClick(InventoryClickEvent event) {
+                // The casino routes its own clicks through one interface, so a
+                // game added later never has to be added to this chain.
+                if (event.getInventory().getHolder() instanceof CasinoScreen screen) {
+                    screen.handleClick(event);
+                    return;
+                }
                 if (event.getInventory().getHolder() instanceof PlanetsMenu menu) {
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof LobbiesMenu menu) {
@@ -416,6 +522,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 } else if (event.getInventory().getHolder() instanceof MyPlanetAbandonMenu menu) {
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof MyPlanetVisitorsMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof MyPlanetFriendsMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof MyPlanetPermissionsMenu menu) {
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof BuyPlanetMenu menu) {
                     menu.handleClick(event);
@@ -445,6 +555,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof MusicPickerMenu menu) {
                     menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof MusicMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof MusicPlaylistsMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof MusicPlaylistEditMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof GalaxyMapMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof MyPlanetVisitRequestsMenu menu) {
+                    menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof AdminLobbiesMenu menu) {
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof AdminLobbyPanelMenu menu) {
@@ -456,6 +576,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 } else if (event.getInventory().getHolder() instanceof PlayerSettingsMenu menu) {
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof SidebarEditorMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof SidebarColourMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof ExternalSettingsMenu menu) {
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof HomeColourMenu menu) {
                     menu.handleClick(event);
@@ -675,11 +799,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             public void onPlayerQuit(PlayerQuitEvent event) {
                 UUID quitter = event.getPlayer().getUniqueId();
                 PlanetEffects.remove(event.getPlayer());
+                // A player's casino cooldowns leave with them.
+                if (casino != null) {
+                    casino.forget(quitter);
+                }
                 // Drop any half-finished help-search prompt with the player.
                 helpSigns.remove(quitter);
                 helpChatSearch.remove(quitter);
                 // Drop a half-finished lobby edit too.
                 pendingLobbyEdits.remove(quitter);
+                // A half-finished playlist rename goes with the player too.
+                pendingPlaylistRenames.remove(quitter);
                 // Personal-setting bookkeeping.
                 lastChatAt.remove(quitter);
                 lastMentionAt.remove(quitter);
@@ -989,6 +1119,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     return;
                 }
 
+                // Playlist rename prompts: the next chat message is the new name.
+                String playlistRename = pendingPlaylistRenames.remove(player.getUniqueId());
+                if (playlistRename != null) {
+                    event.setCancelled(true);
+                    String input = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+                            .plainText().serialize(event.message()).trim();
+                    Bukkit.getScheduler().runTask(Planets.this,
+                            () -> applyPlaylistRename(player, playlistRename, input));
+                    return;
+                }
+
                 // Lobby editor prompts: name, description or menu slot.
                 PendingLobbyEdit lobbyEdit = pendingLobbyEdits.remove(player.getUniqueId());
                 if (lobbyEdit != null) {
@@ -1044,8 +1185,20 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         if (cardService != null) {
             cardService.shutdown();
         }
+        if (casino != null) {
+            casino.shutdown();
+        }
         if (playerSettings != null) {
             playerSettings.save();
+        }
+        if (playerMusic != null) {
+            playerMusic.save();
+        }
+        if (spaceTravel != null) {
+            spaceTravel.save();
+        }
+        if (shipPilot != null) {
+            shipPilot.shutdown();
         }
         if (homeManager != null) {
             homeManager.save();
@@ -1057,6 +1210,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command, @NotNull String label, @NotNull String[] args) {
         // /lobby, /hub and /l open the LOBBIES menu for any player with planets.use.
         String commandName = command.getName().toLowerCase(Locale.ROOT);
+
+        // /casino and /gambling — the Casino hub and its sub-commands.
+        if (commandName.equals("casino") || commandName.equals("gambling")) {
+            if (casinoCommand == null) {
+                sender.sendMessage(Component.text("The casino is not available right now.")
+                        .color(NamedTextColor.RED));
+                return true;
+            }
+            return casinoCommand.handle(sender, args);
+        }
 
         // /friend and /friends — the Friends & Social system.
         if (commandName.equals("friend") || commandName.equals("friends")) {
@@ -1091,6 +1254,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 sender.sendMessage(Component.text("Only players can use the lobby commands.").color(NamedTextColor.RED));
                 return true;
             }
+            if (refuseWhileFlying(player)) {
+                return true;
+            }
             handleLobbyCommand(player, args);
             return true;
         }
@@ -1101,7 +1267,41 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 sender.sendMessage(Component.text("Only players can use /myp.").color(NamedTextColor.RED));
                 return true;
             }
+            if (refuseWhileFlying(player)) {
+                return true;
+            }
             handleMypCommand(player, args);
+            return true;
+        }
+
+        // /music — the player's own songs and playlists.
+        // /ship — board the ship and open the star chart.
+        if (commandName.equals("ship") || commandName.equals("spaceship")
+                || commandName.equals("starchart")) {
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(Component.text("Only players can fly.").color(NamedTextColor.RED));
+                return true;
+            }
+            if (!player.hasPermission("planets.ship")) {
+                player.sendMessage(Component.text("You don't have permission to fly.")
+                        .color(NamedTextColor.RED));
+                return true;
+            }
+            handleShipCommand(player, args);
+            return true;
+        }
+
+        if (commandName.equals("music")) {
+            if (!(sender instanceof Player player)) {
+                sender.sendMessage(Component.text("Only players can open /music.").color(NamedTextColor.RED));
+                return true;
+            }
+            if (!player.hasPermission("planets.music")) {
+                player.sendMessage(Component.text("You don't have permission to play music.")
+                        .color(NamedTextColor.RED));
+                return true;
+            }
+            handleMusicCommand(player, args);
             return true;
         }
 
@@ -1210,10 +1410,22 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             PlanetEffects.loadConfig(getConfig());
             environment.loadConfig(getConfig());
             music.loadConfig(getConfig());
+            if (playerMusic != null) {
+                playerMusic.loadConfig(getConfig());
+                spaceTravel.loadConfig(getConfig());
+            }
+            if (spaceWorld != null) {
+                spaceWorld.loadConfig(getConfig());
+            }
             if (sidebar.loadConfig(getConfig())) {
                 saveConfigQuietly();
             }
             sidebar.start();
+            if (sidebar.finePadding()) {
+                // /planets reload: make sure the pack is in place for the newly
+                // switched-on padding, without saying so twice.
+                SidebarPack.write(this);
+            }
             if (MenuStyle.loadConfig(getConfig().getConfigurationSection("menu-style"))) {
                 saveConfig();
             }
@@ -1321,6 +1533,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
         List<Planet> planets = availablePlanets();
         if (args.length == 0) {
+            if (refuseWhileFlying(player)) {
+                return true;
+            }
             new PlanetsMenu(this, planets, player).open(player);
             return true;
         }
@@ -1357,6 +1572,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             return cardsCommand == null ? List.of()
                     : cardsCommand.tabComplete(sender, tabCommand, args);
         }
+        if (tabCommand.equals("casino") || tabCommand.equals("gambling")) {
+            return casinoCommand == null ? List.of() : casinoCommand.tabComplete(sender, args);
+        }
         if (!(sender instanceof Player player) || args.length == 0) {
             return List.of();
         }
@@ -1374,6 +1592,50 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
         if (commandName.equals("myp")) {
             return mypTabComplete(player, args);
+        }
+        if (commandName.equals("ship") || commandName.equals("spaceship")
+                || commandName.equals("starchart")) {
+            String shipPrefix = args.length == 0 ? "" : args[args.length - 1].toLowerCase(Locale.ROOT);
+            List<String> shipSuggestions = new ArrayList<>();
+            if (args.length <= 1) {
+                shipSuggestions.addAll(List.of("fly", "chart", "invite", "ride", "leave"));
+                if (player.hasPermission("planets.admin")) {
+                    shipSuggestions.addAll(List.of("rebuild", "edit", "pads"));
+                }
+            } else if (args[0].equalsIgnoreCase("ride")) {
+                // Everyone in the air is somebody to ride with.
+                if (shipPilot != null) {
+                    shipSuggestions.addAll(shipPilot.pilotNames());
+                }
+            } else if (args[0].equalsIgnoreCase("invite")) {
+                // Anyone online who isn't already flying or riding along.
+                for (Player online : Bukkit.getOnlinePlayers()) {
+                    if (!online.getUniqueId().equals(player.getUniqueId())) {
+                        shipSuggestions.add(online.getName());
+                    }
+                }
+            }
+            return shipSuggestions.stream()
+                    .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(shipPrefix))
+                    .toList();
+        }
+        if (commandName.equals("music")) {
+            String musicPrefix = args.length == 0 ? "" : args[args.length - 1].toLowerCase(Locale.ROOT);
+            List<String> suggestions = new ArrayList<>();
+            if (args.length <= 1) {
+                suggestions.addAll(List.of("play", "playlists", "next", "stop", "help"));
+                // Their own playlists as well, so "/music <playlist>" needs no menu.
+                if (playerMusic != null) {
+                    for (PlayerMusic.Playlist playlist : playerMusic.playlists(player.getUniqueId())) {
+                        suggestions.add(playlist.name());
+                    }
+                }
+            } else if (args[0].equalsIgnoreCase("play")) {
+                suggestions.addAll(PlanetMusic.musicSoundNames());
+            }
+            return suggestions.stream()
+                    .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(musicPrefix))
+                    .toList();
         }
         if (commandName.equals("home") || commandName.equals("delhome")) {
             // Suggest the player's own home names (and "list" for /home).
@@ -1781,6 +2043,149 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
+    /** A resolved "/planets world &lt;planet&gt; ..." target and the name to show it by. */
+    private record WorldTarget(World world, String label) {
+    }
+
+    /**
+     * Turns the planet argument of "/planets world &lt;planet&gt; &lt;property&gt;" into the
+     * world to act on. A public planet is matched by its menu name, anything else
+     * by its world name — and, when that finds nothing, by any name or alias
+     * Multiverse knows, loaded or not: a planet that is only unloaded, a lobby, or
+     * a world that goes by a Multiverse alias ("test" for a world called
+     * "normal") is loaded on the spot instead of being reported as unknown.
+     * <p>
+     * Sends the player why it failed, and returns null when nothing matches.
+     */
+    private WorldTarget resolveWorldTarget(Player player, String query) {
+        Planet planet = findPlanet(availablePlanets(), query);
+        if (planet != null) {
+            World loaded = Bukkit.getWorld(planet.worldName());
+            if (loaded != null) {
+                return new WorldTarget(loaded, worldLabel(planet.name(), loaded.getName()));
+            }
+        }
+        World loaded = findLoadedWorld(query);
+        if (loaded != null) {
+            return new WorldTarget(loaded, worldLabel(query, loaded.getName()));
+        }
+        MultiverseWorlds.Target known = MultiverseWorlds.resolve(query);
+        if (known.known()) {
+            World reopened = known.world() != null ? known.world() : loadWorldNow(known.worldName());
+            if (reopened != null) {
+                return new WorldTarget(reopened, worldLabel(known.displayName(), reopened.getName()));
+            }
+            player.sendMessage(Component.text("Multiverse knows ").color(NamedTextColor.RED)
+                    .append(Component.text(known.worldName()).color(NamedTextColor.YELLOW))
+                    .append(Component.text(" but could not load it — see the console.").color(NamedTextColor.RED)));
+            return null;
+        }
+        // A player-owned planet whose folder is on disk but that Multiverse no
+        // longer lists at all: bring it back and apply the change in one go.
+        String owned = unloadedOwnedWorld(query);
+        if (owned != null) {
+            World reopened = loadWorldNow(owned);
+            if (reopened != null) {
+                return new WorldTarget(reopened, reopened.getName());
+            }
+            player.sendMessage(Component.text("☄ Loading ").color(NamedTextColor.YELLOW)
+                    .append(Component.text(owned).color(NamedTextColor.AQUA))
+                    .append(Component.text(" — run the command again in a moment.").color(NamedTextColor.YELLOW)));
+            return null;
+        }
+        player.sendMessage(
+                Component.text("Unknown planet '").color(NamedTextColor.RED)
+                        .append(Component.text(query).color(NamedTextColor.YELLOW))
+                        .append(Component.text("'. Public planets are in /planets, owned ones in /myp.").color(NamedTextColor.RED))
+        );
+        List<String> similar = similarWorldNames(query);
+        if (!similar.isEmpty()) {
+            player.sendMessage(Component.text("Did you mean: ").color(NamedTextColor.GRAY)
+                    .append(Component.text(String.join(", ", similar)).color(NamedTextColor.YELLOW))
+                    .append(Component.text("?").color(NamedTextColor.GRAY)));
+        }
+        player.sendMessage(Component.text("Tip: \"/planets world <planet> status\" lists everything a planet has set.")
+                .color(NamedTextColor.GRAY));
+        return null;
+    }
+
+    /** Names a property change target: "test (world 'normal')" when the two differ. */
+    private static String worldLabel(String display, String worldName) {
+        if (display == null || display.isBlank() || worldNameMatches(worldName, display)) {
+            return worldName;
+        }
+        return display + " (world '" + worldName + "')";
+    }
+
+    /**
+     * Up to three names close to what the admin typed, taken from the planet
+     * menu, from Multiverse's own names and aliases and from the loaded worlds —
+     * so a typo or an alias that goes by another name still finds its world.
+     */
+    private List<String> similarWorldNames(String query) {
+        String wanted = normalizeWorldQuery(query);
+        List<String> candidates = new ArrayList<>();
+        for (Planet planet : availablePlanets()) {
+            candidates.add(planet.name());
+            candidates.add(planet.worldName());
+        }
+        candidates.addAll(MultiverseWorlds.knownNames());
+        for (World world : Bukkit.getWorlds()) {
+            candidates.add(world.getName());
+        }
+        List<String> matches = new ArrayList<>();
+        for (String candidate : candidates) {
+            if (candidate == null || candidate.isBlank() || matches.contains(candidate)) {
+                continue;
+            }
+            if (closeEnough(wanted, normalizeWorldQuery(candidate))) {
+                matches.add(candidate);
+                if (matches.size() == 3) {
+                    break;
+                }
+            }
+        }
+        return matches;
+    }
+
+    /** Flattens a world name or query for comparison: lowercase, separators, namespace. */
+    private static String normalizeWorldQuery(String name) {
+        String flat = name.toLowerCase(Locale.ROOT).replace('_', ' ').replace('-', ' ').trim();
+        return flat.startsWith("minecraft:") ? flat.substring("minecraft:".length()) : flat;
+    }
+
+    /** Whether a candidate name is worth suggesting for a query: prefix, part or typo. */
+    private static boolean closeEnough(String wanted, String candidate) {
+        if (wanted.isEmpty() || candidate.isEmpty()) {
+            return false;
+        }
+        if (wanted.length() < 3) {
+            return candidate.startsWith(wanted);
+        }
+        return candidate.startsWith(wanted) || candidate.contains(wanted) || wanted.contains(candidate)
+                || editDistance(wanted, candidate) <= 2;
+    }
+
+    /** Levenshtein distance, used only for the "did you mean" hints. */
+    private static int editDistance(String a, String b) {
+        int[] previous = new int[b.length() + 1];
+        int[] current = new int[b.length() + 1];
+        for (int j = 0; j <= b.length(); j++) {
+            previous[j] = j;
+        }
+        for (int i = 1; i <= a.length(); i++) {
+            current[0] = i;
+            for (int j = 1; j <= b.length(); j++) {
+                int substitution = previous[j - 1] + (a.charAt(i - 1) == b.charAt(j - 1) ? 0 : 1);
+                current[j] = Math.min(Math.min(current[j - 1] + 1, previous[j] + 1), substitution);
+            }
+            int[] swap = previous;
+            previous = current;
+            current = swap;
+        }
+        return previous[b.length()];
+    }
+
     /**
      * Handles "/planets create <name> [type] [generation]": creates a brand new world
      * and teleports the creator to it. Types: normal, nether, the_end (lava planets
@@ -1909,32 +2314,26 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text("'... this can take a few seconds.").color(NamedTextColor.GRAY)));
 
         // Station worlds are created as flat superflat so there is a clean,
-        // buildable base at spawn (no ocean/terrain to clear first).
-        // All new worlds use a 15-chunk radius (30-chunk diameter).
-        String extra = isStation ? " --world-type flat --diameter 30" : " --diameter 30";
-        boolean dispatched = getServer().dispatchCommand(getServer().getConsoleSender(),
-                "mv create " + name + " " + env.name().toLowerCase(Locale.ROOT) + extra);
-        if (!dispatched) {
-            player.sendMessage(Component.text("Couldn't reach the Multiverse command; is Multiverse-Core enabled?").color(NamedTextColor.RED));
+        // buildable base at spawn (no ocean/terrain to clear first). The border is
+        // set afterwards by setPlanetWorldBorder(): Multiverse's creation API takes
+        // no border size, and asking its command line for one ("--diameter") is
+        // exactly what used to make every new planet fail.
+        MultiverseWorlds.Outcome created = MultiverseWorlds.create(name, env, isStation, structuresEnabled(name));
+        if (!created.ok() || created.world() == null) {
+            // The reason comes back from Multiverse itself, so it can be shown right
+            // here instead of only appearing in the console.
+            String reason = created.ok()
+                    ? "Multiverse created it but Bukkit did not hand the world over"
+                    : created.detail();
+            getLogger().warning("Could not create world '" + name + "': " + reason);
+            player.sendMessage(Component.text("The world '").color(NamedTextColor.RED)
+                    .append(Component.text(name).color(NamedTextColor.YELLOW))
+                    .append(Component.text("' couldn't be created: ").color(NamedTextColor.RED))
+                    .append(Component.text(reason).color(NamedTextColor.YELLOW))
+                    .append(Component.text(".").color(NamedTextColor.RED)));
             return;
         }
-
-        // Creation is synchronous, so the world should exist right away; double-check
-        // shortly after in case Multiverse is still finishing spawn setup.
-        World created = Bukkit.getWorld(name);
-        if (created != null) {
-            onPlanetCreated(player, name, env, isStation);
-            return;
-        }
-        Bukkit.getScheduler().runTaskLater(this, () -> {
-            if (Bukkit.getWorld(name) != null) {
-                onPlanetCreated(player, name, env, isStation);
-            } else {
-                player.sendMessage(Component.text("The world '").color(NamedTextColor.RED)
-                        .append(Component.text(name).color(NamedTextColor.YELLOW))
-                        .append(Component.text("' couldn't be created. Check the console — the folder may already exist.").color(NamedTextColor.RED)));
-            }
-        }, 100L);
+        onPlanetCreated(player, name, env, isStation);
     }
 
     private void onPlanetCreated(Player player, String name, World.Environment environment, boolean station) {
@@ -2299,13 +2698,20 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         + "') has been removed — you were moved out.").color(NamedTextColor.YELLOW));
             }
         }
-        getServer().dispatchCommand(getServer().getConsoleSender(), "mv unload " + worldName);
-        File folder = new File(Bukkit.getWorldContainer(), worldName);
-        if (folder.exists()) {
-            deleteWorldFolder(folder);
-        }
-        if (MultiverseHook.isPresent()) {
-            MultiverseHook.forget(worldName);
+        // Multiverse removes the world, its entry and its folder in one call. When it
+        // can't (it no longer knows the world, or the call failed), unload it and
+        // delete whatever folder is left on disk ourselves.
+        MultiverseWorlds.Outcome deleted = MultiverseWorlds.delete(worldName);
+        if (!deleted.ok()) {
+            getLogger().warning("Multiverse could not delete '" + worldName + "': " + deleted.detail());
+            MultiverseWorlds.unload(worldName);
+            File folder = worldFolder(worldName);
+            if (folder != null && folder.isDirectory()) {
+                deleteWorldFolder(folder);
+            }
+            if (MultiverseHook.isPresent()) {
+                MultiverseHook.forget(worldName);
+            }
         }
         return Bukkit.getWorld(worldName) == null;
     }
@@ -2800,18 +3206,52 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * through on case-sensitive filesystems.
      */
     private boolean worldFolderExists(String worldName) {
-        if (new File(Bukkit.getWorldContainer(), worldName).isDirectory()) {
-            return true;
+        return worldFolder(worldName) != null;
+    }
+
+    /**
+     * The folder a world lives in, or {@code null} when there is none. Loaded worlds
+     * are the authority on where that is: this Paper build keeps every level under the
+     * main level folder (<container>/<level>/dimensions/<namespace>/<world>) while
+     * older ones put worlds straight in the container, and asking a live world covers
+     * both. Returns the exact directory found, so callers can delete it.
+     */
+    private File worldFolder(String worldName) {
+        if (worldName == null || worldName.isBlank()) {
+            return null;
         }
-        File[] children = Bukkit.getWorldContainer().listFiles(File::isDirectory);
+        File direct = folderIn(Bukkit.getWorldContainer(), worldName);
+        if (direct != null) {
+            return direct;
+        }
+        for (World world : Bukkit.getWorlds()) {
+            File parent = world.getWorldFolder().getParentFile();
+            File nested = parent == null ? null : folderIn(parent, worldName);
+            if (nested != null) {
+                return nested;
+            }
+        }
+        return null;
+    }
+
+    /** The directory called {@code name} inside {@code dir}, ignoring case. */
+    private static File folderIn(File dir, String name) {
+        if (dir == null || !dir.isDirectory()) {
+            return null;
+        }
+        File exact = new File(dir, name);
+        if (exact.isDirectory()) {
+            return exact;
+        }
+        File[] children = dir.listFiles(File::isDirectory);
         if (children != null) {
             for (File child : children) {
-                if (child.getName().equalsIgnoreCase(worldName)) {
-                    return true;
+                if (child.getName().equalsIgnoreCase(name)) {
+                    return child;
                 }
             }
         }
-        return false;
+        return null;
     }
 
     /** Creates a brand-new planet world with the archetype's unique terrain. */
@@ -2887,7 +3327,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             player.sendMessage(Component.text("Middle Earth is the plugin's home world and can't be deleted.").color(NamedTextColor.RED));
             return;
         }
-        if (planet == null && world == null && !new File(Bukkit.getWorldContainer(), worldName).isDirectory()) {
+        if (planet == null && world == null && !worldFolderExists(worldName)) {
             player.sendMessage(
                     Component.text("Unknown planet '").color(NamedTextColor.RED)
                             .append(Component.text(query).color(NamedTextColor.YELLOW))
@@ -3227,26 +3667,64 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             if (!player.isOnline()) {
                 return;
             }
-            Planet planet = findPlanet(availablePlanets(), player.getWorld().getName());
+            String worldName = player.getWorld().getName();
+            // A planet that has since gone private (or stopped accepting
+            // visitors) refuses everybody who is not a member.
+            MyPlanetData data = myPlanetManager.get(worldName);
+            if (data != null && !data.isMember(player.getUniqueId())
+                    && (!data.isPublic() || !data.visitorAccess())) {
+                relocate(player, data.displayName(), worldName,
+                        data.isPublic() ? "isn't accepting visitors right now"
+                                : "is private and you aren't a member");
+                return;
+            }
+            Planet planet = findPlanet(availablePlanets(), worldName);
             if (planet != null && !canVisit(player, planet)) {
                 relocate(player, planet, "is locked and you don't have permission to be there");
             }
         }, 1L);
     }
 
+    /**
+     * Moves every non-member off a planet that was just set to private or had
+     * its Visitor Access switched off. Members (and the owner) stay put.
+     */
+    void enforcePlanetPrivacy(MyPlanetData data) {
+        if (data.isPublic() && data.visitorAccess()) {
+            return;
+        }
+        World world = Bukkit.getWorld(data.worldName());
+        if (world == null) {
+            return;
+        }
+        for (Player occupant : List.copyOf(world.getPlayers())) {
+            if (data.isMember(occupant.getUniqueId())) {
+                continue;
+            }
+            relocate(occupant, data.displayName(), data.worldName(),
+                    data.isPublic() ? "isn't accepting visitors right now"
+                            : "is private now — only members can stay");
+        }
+    }
+
     /** Teleports the player to the hub and explains why. */
     private void relocate(Player player, Planet planet, String reason) {
-        Location hub = hubLocation(planet);
+        relocate(player, planet.name(), planet.worldName(), reason);
+    }
+
+    /** Teleports the player to the hub and explains why (works without a Planet object). */
+    private void relocate(Player player, String planetName, String worldName, String reason) {
+        Location hub = hubLocation(worldName);
         if (hub == null) {
             return;
         }
         player.teleport(hub);
         player.sendMessage(Component.text("Planet ").color(NamedTextColor.RED)
-                .append(Component.text(planet.name()).color(NamedTextColor.YELLOW))
+                .append(Component.text(planetName).color(NamedTextColor.YELLOW))
                 .append(Component.text(" " + reason + " — you were moved to ").color(NamedTextColor.RED))
                 .append(Component.text(hub.getWorld().getName()).color(NamedTextColor.YELLOW))
                 .append(Component.text(".").color(NamedTextColor.RED)));
-        getLogger().info("Moved " + player.getName() + " out of " + planet.name() + " (" + planet.worldName()
+        getLogger().info("Moved " + player.getName() + " out of " + planetName + " (" + worldName
                 + ") to " + hub.getWorld().getName() + ": " + reason + ".");
     }
 
@@ -3256,21 +3734,26 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * were kicked from (so nobody is "moved" to the very world they can't visit).
      */
     private Location hubLocation(Planet from) {
+        return hubLocation(from.worldName());
+    }
+
+    /** Where locked-out players are sent, given the world they are leaving. */
+    private Location hubLocation(String fromWorldName) {
         String hubName = getConfig().getString("middle-earth-world", "Middle_earth");
-        if (!hubName.equalsIgnoreCase(from.worldName())) {
+        if (!hubName.equalsIgnoreCase(fromWorldName)) {
             World hub = Bukkit.getWorld(hubName);
             if (hub != null && hub.getEnvironment() == World.Environment.NORMAL) {
                 return hub.getSpawnLocation();
             }
         }
         for (World world : Bukkit.getWorlds()) {
-            if (!world.getName().equalsIgnoreCase(from.worldName())
+            if (!world.getName().equalsIgnoreCase(fromWorldName)
                     && world.getEnvironment() == World.Environment.NORMAL) {
                 return world.getSpawnLocation();
             }
         }
         for (World world : Bukkit.getWorlds()) {
-            if (!world.getName().equalsIgnoreCase(from.worldName())) {
+            if (!world.getName().equalsIgnoreCase(fromWorldName)) {
                 return world.getSpawnLocation();
             }
         }
@@ -3285,6 +3768,97 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             "border", "spawn", "seed", "regen", "gravity",
             "weather", "effect", "atmosphere", "dimensions", "sky", "particles",
             "day-cycle", "weather-cycle", "status", "terrain", "structures");
+
+    /** The spawn-limit properties, and the config keys their values are saved under. */
+    private static final List<String> SPAWN_LIMIT_PROPERTIES = List.of("monsters", "animals", "ambient", "water");
+
+    /** The player-facing label of a spawn-limit property. */
+    private static String spawnLimitLabel(String property) {
+        return switch (property) {
+            case "monsters" -> "Monster";
+            case "animals" -> "Animal";
+            case "ambient" -> "Ambient";
+            default -> "Water creature";
+        };
+    }
+
+    /**
+     * Applies a world's spawn limit. Bukkit's {@code -1} means "whatever the
+     * server has in bukkit.yml", which is how an admin puts a planet back to the
+     * server-wide setting instead of a number.
+     */
+    private static void applySpawnLimit(World world, String property, int count) {
+        switch (property) {
+            case "monsters" -> world.setMonsterSpawnLimit(count);
+            case "animals" -> world.setAnimalSpawnLimit(count);
+            case "ambient" -> world.setAmbientSpawnLimit(count);
+            case "water" -> world.setWaterAnimalSpawnLimit(count);
+            default -> {
+            }
+        }
+    }
+
+    /** What a world's spawn limit reads back as: a count, or the server's own setting. */
+    private static String spawnLimitText(World world, String property) {
+        int count = switch (property) {
+            case "monsters" -> world.getMonsterSpawnLimit();
+            case "animals" -> world.getAnimalSpawnLimit();
+            case "ambient" -> world.getAmbientSpawnLimit();
+            default -> world.getWaterAnimalSpawnLimit();
+        };
+        return count < 0 ? "the server default" : String.valueOf(count);
+    }
+
+    /**
+     * Saves a spawn limit in the plugin's config. Bukkit keeps per-world spawn
+     * limits in memory only, so without this a limit set by an admin would
+     * silently be back to the server default after the next restart.
+     */
+    private void rememberSpawnLimit(String worldName, String property, int count) {
+        // Nested sections rather than dotted paths: a world name may itself
+        // contain a dot, and then the path would point at the wrong section.
+        ConfigurationSection limits = getConfig().getConfigurationSection("spawn-limits");
+        if (limits == null) {
+            limits = getConfig().createSection("spawn-limits");
+        }
+        ConfigurationSection world = limits.getConfigurationSection(worldName);
+        if (world == null) {
+            world = limits.createSection(worldName);
+        }
+        world.set(property, count < 0 ? null : count);
+        if (world.getKeys(false).isEmpty()) {
+            limits.set(worldName, null);
+        }
+        if (limits.getKeys(false).isEmpty()) {
+            getConfig().set("spawn-limits", null);
+        }
+        saveConfigQuietly();
+    }
+
+    /** Re-applies the spawn limits saved for a world (used whenever a world loads). */
+    private void restoreSpawnLimits(World world) {
+        ConfigurationSection limits = getConfig().getConfigurationSection("spawn-limits");
+        ConfigurationSection saved = limits == null ? null : limits.getConfigurationSection(world.getName());
+        if (saved == null) {
+            return;
+        }
+        for (String property : saved.getKeys(false)) {
+            if (SPAWN_LIMIT_PROPERTIES.contains(property)) {
+                applySpawnLimit(world, property, saved.getInt(property));
+            }
+        }
+    }
+
+    /**
+     * Writes an admin's property change to the console. A planet property is
+     * otherwise invisible: the chat line scrolls away and nothing anywhere says
+     * what was set, which is exactly why "the command didn't work" is so hard to
+     * tell apart from "the command worked but nothing looks different".
+     */
+    private void logWorldChange(Player player, String worldName, String property, Object value) {
+        getLogger().info("[planets] " + player.getName() + " set " + property
+                + " on world '" + worldName + "' to " + value + ".");
+    }
 
     /**
      * Handles "/planets world <planet> <property> [value...]": changes world
@@ -3322,36 +3896,14 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         String property = args[propertyIndex].toLowerCase(Locale.ROOT);
         String[] values = Arrays.copyOfRange(args, propertyIndex + 1, args.length);
 
-        Planet planet = findPlanet(availablePlanets(), planetQuery);
-        // Public planets come from the menu; anything else (a player-owned
-        // planet, a lobby, a planet's Nether/End) is matched by world name.
-        World world = planet != null ? Bukkit.getWorld(planet.worldName()) : findLoadedWorld(planetQuery);
-        if (world == null && planet != null) {
-            player.sendMessage(Component.text("The world of ").color(NamedTextColor.RED)
-                    .append(Component.text(planet.name()).color(NamedTextColor.YELLOW))
-                    .append(Component.text(" isn't loaded right now.").color(NamedTextColor.RED)));
+        WorldTarget target = resolveWorldTarget(player, planetQuery);
+        if (target == null) {
             return;
         }
-        if (world == null) {
-            // A player-owned planet that Multiverse left unloaded: bring it back
-            // and let the admin ask again once it is up.
-            String unloaded = unloadedOwnedWorld(planetQuery);
-            if (unloaded != null) {
-                loadWorldNow(unloaded);
-                player.sendMessage(Component.text("☄ Loading ").color(NamedTextColor.YELLOW)
-                        .append(Component.text(unloaded).color(NamedTextColor.AQUA))
-                        .append(Component.text(" — run the command again in a moment.").color(NamedTextColor.YELLOW)));
-                return;
-            }
-            player.sendMessage(
-                    Component.text("Unknown planet '").color(NamedTextColor.RED)
-                            .append(Component.text(planetQuery).color(NamedTextColor.YELLOW))
-                            .append(Component.text("'. Public planets are in /planets, owned ones in /myp.").color(NamedTextColor.RED))
-            );
-            return;
-        }
-
-        String planetName = planet != null ? planet.name() : world.getName();
+        World world = target.world();
+        // The label carries the real world name when the admin used a display
+        // name or an alias, so "test" always reads back as "test (world 'normal')".
+        String planetName = target.label();
         switch (property) {
             case "time" -> {
                 if (values.length == 0) {
@@ -3426,10 +3978,14 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     // Read it back, so the message always matches the world's
                     // real value (a gamerule that refused to change shows up).
                     Integer applied = world.getGameRuleValue(GameRule.RANDOM_TICK_SPEED);
+                    int actual = applied == null ? speed : applied;
                     player.sendMessage(Component.text("Random tick speed on ").color(NamedTextColor.GREEN)
                             .append(Component.text(planetName).color(NamedTextColor.YELLOW))
-                            .append(Component.text(" set to " + (applied == null ? speed : applied) + ".")
-                                    .color(NamedTextColor.GREEN)));
+                            .append(Component.text(" set to " + actual + ".").color(NamedTextColor.GREEN)));
+                    player.sendMessage(Component.text("Random tick speed is what crops, grass and leaves use"
+                            + " their random updates for — it does not change how fast the world runs.")
+                            .color(NamedTextColor.GRAY));
+                    logWorldChange(player, world.getName(), "tick-speed", actual);
                 } catch (NumberFormatException ex) {
                     player.sendMessage(Component.text("Invalid tick speed '").color(NamedTextColor.RED)
                             .append(Component.text(values[0]).color(NamedTextColor.YELLOW))
@@ -3504,36 +4060,44 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 }
             }
             case "monsters", "animals", "ambient", "water" -> {
+                String label = spawnLimitLabel(property);
                 if (values.length == 0) {
-                    player.sendMessage(Component.text("Usage: /planets world <planet> " + property + " <count>").color(NamedTextColor.YELLOW));
+                    statusLine(player, label + " spawn limit", spawnLimitText(world, property));
+                    player.sendMessage(Component.text("Usage: /planets world <planet> " + property
+                            + " <count|on|off> — 'on' uses the server's own setting, 'off' disables them")
+                            .color(NamedTextColor.YELLOW));
                     return;
                 }
-                try {
-                    int count = Integer.parseInt(values[0]);
-                    if (count < 0) {
-                        player.sendMessage(Component.text("Count must be 0 or more.").color(NamedTextColor.RED));
+                String raw = values[0].toLowerCase(Locale.ROOT);
+                int count;
+                if (raw.equals("off") || raw.equals("none") || raw.equals("disable") || raw.equals("false")) {
+                    count = 0;
+                } else if (raw.equals("on") || raw.equals("default") || raw.equals("reset")
+                        || raw.equals("enable") || raw.equals("true")) {
+                    count = -1; // back to whatever bukkit.yml wants
+                } else {
+                    try {
+                        count = Integer.parseInt(raw);
+                    } catch (NumberFormatException ex) {
+                        player.sendMessage(Component.text("Invalid count '").color(NamedTextColor.RED)
+                                .append(Component.text(values[0]).color(NamedTextColor.YELLOW))
+                                .append(Component.text("' — use a number, 'on' for the server default or 'off'."
+                                        + " Nothing was changed.").color(NamedTextColor.RED)));
                         return;
                     }
-                    switch (property) {
-                        case "monsters" -> world.setMonsterSpawnLimit(count);
-                        case "animals" -> world.setAnimalSpawnLimit(count);
-                        case "ambient" -> world.setAmbientSpawnLimit(count);
-                        default -> world.setWaterAnimalSpawnLimit(count);
-                    }
-                    String label = switch (property) {
-                        case "monsters" -> "Monster";
-                        case "animals" -> "Animal";
-                        case "ambient" -> "Ambient";
-                        default -> "Water creature";
-                    };
-                    player.sendMessage(Component.text(label + " spawn limit on ").color(NamedTextColor.GREEN)
-                            .append(Component.text(planetName).color(NamedTextColor.YELLOW))
-                            .append(Component.text(" set to " + count + ".").color(NamedTextColor.GREEN)));
-                } catch (NumberFormatException ex) {
-                    player.sendMessage(Component.text("Invalid count '").color(NamedTextColor.RED)
-                            .append(Component.text(values[0]).color(NamedTextColor.YELLOW))
-                            .append(Component.text("'.").color(NamedTextColor.RED)));
                 }
+                if (count < -1) {
+                    player.sendMessage(Component.text("Count must be 0 or more — use 'on' for the server default.")
+                            .color(NamedTextColor.RED));
+                    return;
+                }
+                applySpawnLimit(world, property, count);
+                rememberSpawnLimit(world.getName(), property, count);
+                player.sendMessage(Component.text(label + " spawn limit on ").color(NamedTextColor.GREEN)
+                        .append(Component.text(planetName).color(NamedTextColor.YELLOW))
+                        .append(Component.text(" is now " + spawnLimitText(world, property)
+                                + " — saved, so it survives a restart.").color(NamedTextColor.GREEN)));
+                logWorldChange(player, world.getName(), property + " spawn limit", count < 0 ? "server default" : count);
             }
             case "border" -> {
                 if (values.length == 0) {
@@ -3685,8 +4249,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                                 : " is now locked to " + value + ".").color(NamedTextColor.GREEN)));
             }
             case "effect" -> {
-                if (values.length < 2) {
-                    player.sendMessage(Component.text("Usage: /planets world <planet> effect <effect> <amplifier|off> — effects: jump, speed, strength, swim, breath, fall, ...").color(NamedTextColor.YELLOW));
+                if (values.length < 1) {
+                    player.sendMessage(Component.text("Usage: /planets world <planet> effect <effect> <amplifier|on|off> — effects: jump, speed, strength, swim, breath, fall, ...").color(NamedTextColor.YELLOW));
                     return;
                 }
                 String effectKey = values[0].toLowerCase(Locale.ROOT);
@@ -3696,7 +4260,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                             .append(Component.text("'. Try jump, speed, strength, swim, breath or fall.").color(NamedTextColor.RED)));
                     return;
                 }
+                if (values.length == 1) {
+                    Integer current = PlanetEffects.amplifierFor(world.getName(), effectKey);
+                    statusLine(player, "Effect " + effectKey, current == null ? "not set" : "amplifier " + current);
+                    player.sendMessage(Component.text("Usage: /planets world <planet> effect <effect> <amplifier|on|off>").color(NamedTextColor.YELLOW));
+                    return;
+                }
                 String valueArg = values[1].toLowerCase(Locale.ROOT);
+                if (valueArg.equals("on") || valueArg.equals("true")) {
+                    valueArg = "0"; // level I
+                }
                 String effectsPath = "effects." + world.getName() + "." + effectKey;
                 if (valueArg.equals("off") || valueArg.equals("remove") || valueArg.equals("reset")) {
                     getConfig().set(effectsPath, null);
@@ -3715,6 +4288,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                             .append(Component.text(" removed from ").color(NamedTextColor.GREEN))
                             .append(Component.text(planetName).color(NamedTextColor.YELLOW))
                             .append(Component.text(".").color(NamedTextColor.GREEN)));
+                    logWorldChange(player, world.getName(), "effect " + effectKey, "off");
                     return;
                 }
                 try {
@@ -3735,10 +4309,12 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                             .append(Component.text(" on ").color(NamedTextColor.GREEN))
                             .append(Component.text(planetName).color(NamedTextColor.YELLOW))
                             .append(Component.text(" set to amplifier " + amplifier + ".").color(NamedTextColor.GREEN)));
+                    logWorldChange(player, world.getName(), "effect " + effectKey, amplifier);
                 } catch (NumberFormatException ex) {
                     player.sendMessage(Component.text("Invalid amplifier '").color(NamedTextColor.RED)
                             .append(Component.text(valueArg).color(NamedTextColor.YELLOW))
-                            .append(Component.text("' — use a number 0+ or 'off'.").color(NamedTextColor.RED)));
+                            .append(Component.text("' — use a number 0+, 'on' for level I or 'off'."
+                                    + " Nothing was changed.").color(NamedTextColor.RED)));
                 }
             }
             case "mobs" -> {
@@ -3754,7 +4330,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             }
             case "atmosphere" -> {
                 if (values.length == 0) {
-                    player.sendMessage(Component.text("Usage: /planets world <planet> atmosphere <damage-per-second|off> [helmet material...]").color(NamedTextColor.YELLOW));
+                    String current = environment.atmosphereDescription(world.getName());
+                    statusLine(player, "Atmosphere", current == null ? "none — everyone is safe there" : current);
+                    player.sendMessage(Component.text("Usage: /planets world <planet> atmosphere <damage-per-second|on|off>"
+                            + " [helmet material...] — 'on' uses the default damage from config.yml").color(NamedTextColor.YELLOW));
                     return;
                 }
                 if (values[0].equalsIgnoreCase("off") || values[0].equalsIgnoreCase("remove") || values[0].equalsIgnoreCase("reset")) {
@@ -3764,44 +4343,54 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     player.sendMessage(Component.text("Atmosphere of ").color(NamedTextColor.GREEN)
                             .append(Component.text(planetName).color(NamedTextColor.YELLOW))
                             .append(Component.text(" disabled — no more damage.").color(NamedTextColor.GREEN)));
+                    logWorldChange(player, world.getName(), "atmosphere", "off");
                     return;
                 }
-                try {
-                    double damage = Double.parseDouble(values[0]);
-                    if (damage <= 0) {
-                        player.sendMessage(Component.text("Damage must be more than 0 (use 'off' to disable).").color(NamedTextColor.RED));
+                // Validate everything before touching the config: a typo in a helmet
+                // material used to leave a half-written atmosphere behind.
+                double damage;
+                String damageArg = values[0].toLowerCase(Locale.ROOT);
+                if (damageArg.equals("on") || damageArg.equals("true") || damageArg.equals("default")) {
+                    damage = getConfig().getDouble("atmosphere-default-damage", 2.0);
+                } else {
+                    try {
+                        damage = Double.parseDouble(values[0]);
+                    } catch (NumberFormatException ex) {
+                        player.sendMessage(Component.text("Invalid damage '").color(NamedTextColor.RED)
+                                .append(Component.text(values[0]).color(NamedTextColor.YELLOW))
+                                .append(Component.text("' — use damage per second (e.g. 2), 'on' for the default or 'off'."
+                                        + " Nothing was changed.").color(NamedTextColor.RED)));
                         return;
                     }
-                    getConfig().set("atmospheres." + world.getName() + ".damage", damage);
-                    List<String> helmets = new ArrayList<>();
-                    for (int i = 1; i < values.length; i++) {
-                        Material helmet = Material.matchMaterial(values[i]);
-                        if (helmet == null) {
-                            player.sendMessage(Component.text("Unknown material '").color(NamedTextColor.RED)
-                                    .append(Component.text(values[i]).color(NamedTextColor.YELLOW))
-                                    .append(Component.text("'.").color(NamedTextColor.RED)));
-                            return;
-                        }
-                        helmets.add(helmet.name());
-                    }
-                    if (helmets.isEmpty()) {
-                        getConfig().set("atmospheres." + world.getName() + ".helmets", null);
-                    } else {
-                        getConfig().set("atmospheres." + world.getName() + ".helmets", helmets);
-                    }
-                    saveConfigQuietly();
-                    environment.loadConfig(getConfig());
-                    player.sendMessage(Component.text("Atmosphere of ").color(NamedTextColor.GREEN)
-                            .append(Component.text(planetName).color(NamedTextColor.YELLOW))
-                            .append(Component.text(" now deals " + damage + " damage per second").color(NamedTextColor.GREEN))
-                            .append(Component.text(helmets.isEmpty()
-                                    ? " — any helmet protects."
-                                    : " — only " + String.join(", ", helmets) + " protect.").color(NamedTextColor.YELLOW)));
-                } catch (NumberFormatException ex) {
-                    player.sendMessage(Component.text("Invalid damage '").color(NamedTextColor.RED)
-                            .append(Component.text(values[0]).color(NamedTextColor.YELLOW))
-                            .append(Component.text("' — use a number or 'off'.").color(NamedTextColor.RED)));
                 }
+                if (damage <= 0) {
+                    player.sendMessage(Component.text("Damage must be more than 0 (use 'off' to disable)."
+                            + " Nothing was changed.").color(NamedTextColor.RED));
+                    return;
+                }
+                List<String> helmets = new ArrayList<>();
+                for (int i = 1; i < values.length; i++) {
+                    Material helmet = Material.matchMaterial(values[i]);
+                    if (helmet == null) {
+                        player.sendMessage(Component.text("Unknown material '").color(NamedTextColor.RED)
+                                .append(Component.text(values[i]).color(NamedTextColor.YELLOW))
+                                .append(Component.text("'. Nothing was changed.").color(NamedTextColor.RED)));
+                        return;
+                    }
+                    helmets.add(helmet.name());
+                }
+                getConfig().set("atmospheres." + world.getName() + ".damage", damage);
+                getConfig().set("atmospheres." + world.getName() + ".helmets", helmets.isEmpty() ? null : helmets);
+                saveConfigQuietly();
+                environment.loadConfig(getConfig());
+                // Read the setting back, so the reply says what the world really has.
+                player.sendMessage(Component.text("Atmosphere of ").color(NamedTextColor.GREEN)
+                        .append(Component.text(planetName).color(NamedTextColor.YELLOW))
+                        .append(Component.text(" is now " + environment.atmosphereDescription(world.getName()) + ".")
+                                .color(NamedTextColor.GREEN)));
+                player.sendMessage(Component.text("Only Survival players take it — Creative and Spectator are safe.")
+                        .color(NamedTextColor.GRAY));
+                logWorldChange(player, world.getName(), "atmosphere", damage + " damage/sec");
             }
             case "particles" -> {
                 if (values.length == 0) {
@@ -3956,8 +4545,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         .map(entry -> entry.getKey() + " " + entry.getValue())
                         .sorted()
                         .collect(Collectors.joining(", ")));
-                Double atmosphere = environment.atmosphereDamage(world.getName());
-                statusLine(player, "Atmosphere", atmosphere == null ? "none" : atmosphere + " damage/sec");
+                String atmosphere = environment.atmosphereDescription(world.getName());
+                statusLine(player, "Atmosphere", atmosphere == null ? "none" : atmosphere);
                 String skyInfo = environment.skyColorDescription(world.getName());
                 statusLine(player, "Sky colors", skyInfo == null ? "default" : skyInfo);
                 String particleInfo = environment.ambientParticlesDescription(world.getName());
@@ -4014,15 +4603,21 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     player.sendMessage(Component.text("Multiverse-Core is required to regenerate worlds.").color(NamedTextColor.RED));
                     return;
                 }
-                String extra = "";
-                if (values.length > 0) {
-                    extra = values[0].equalsIgnoreCase("random") ? " --seed" : " --seed " + values[0];
-                }
+                // No value at all regenerates with the world's own seed, "random"
+                // picks a fresh one, anything else is the seed to use.
+                String seed = values.length > 0 ? values[0] : null;
                 player.sendMessage(Component.text("Regenerating ").color(NamedTextColor.GRAY)
                         .append(Component.text(planetName).color(NamedTextColor.YELLOW))
-                        .append(Component.text("... this resets all terrain" + (extra.isEmpty() ? " (same seed)" : "") + ". Watch the console.").color(NamedTextColor.GRAY)));
-                getServer().dispatchCommand(getServer().getConsoleSender(), "mv regen " + world.getName() + extra);
-                getServer().dispatchCommand(getServer().getConsoleSender(), "mv confirm");
+                        .append(Component.text("... this resets all terrain" + (seed == null ? " (same seed)" : "") + ".").color(NamedTextColor.GRAY)));
+                MultiverseWorlds.Outcome regenerated = MultiverseWorlds.regenerate(world.getName(), seed);
+                if (!regenerated.ok()) {
+                    getLogger().warning("Could not regenerate '" + world.getName() + "': " + regenerated.detail());
+                    player.sendMessage(Component.text("Could not regenerate '").color(NamedTextColor.RED)
+                            .append(Component.text(planetName).color(NamedTextColor.YELLOW))
+                            .append(Component.text("': ").color(NamedTextColor.RED))
+                            .append(Component.text(regenerated.detail()).color(NamedTextColor.YELLOW))
+                            .append(Component.text(".").color(NamedTextColor.RED)));
+                }
             }
             default -> player.sendMessage(Component.text("Unknown property '").color(NamedTextColor.RED)
                     .append(Component.text(property).color(NamedTextColor.YELLOW))
@@ -4050,7 +4645,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 yield generations;
             }
             case "day-cycle", "weather-cycle" -> List.of("on", "off");
-            case "atmosphere" -> List.of("off");
+            case "atmosphere" -> List.of("on", "off");
             case "sky" -> List.of("off");
             case "particles" -> {
                 List<String> suggestions = new ArrayList<>();
@@ -4059,6 +4654,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 yield suggestions;
             }
             case "tick-speed", "tickspeed", "tick_speed" -> List.of("0", "1", "2", "3", "5", "10", "20");
+            case "monsters", "animals", "ambient", "water" -> List.of("on", "off", "0", "10", "50");
             case "gamerule" -> List.of("randomTickSpeed", "doDaylightCycle", "doWeatherCycle",
                     "doMobSpawning", "keepInventory", "mobGriefing", "doFireTick", "doTileDrops");
             default -> List.of();
@@ -4203,7 +4799,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     }
 
     /** Saves config.yml, swallowing the (impossible on a loaded config) failure. */
-    void saveConfigQuietly() {
+    public void saveConfigQuietly() {
         try {
             saveConfig();
         } catch (RuntimeException ex) {
@@ -4520,30 +5116,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         player.sendMessage(Component.text("Creating the lobby world '").color(NamedTextColor.GRAY)
                 .append(Component.text(id).color(NamedTextColor.YELLOW))
                 .append(Component.text("'... this can take a few seconds.").color(NamedTextColor.GRAY)));
-        boolean dispatched = getServer().dispatchCommand(getServer().getConsoleSender(),
-                "mv create " + id + " normal");
-        if (!dispatched) {
-            player.sendMessage(Component.text("Couldn't reach the Multiverse command; is Multiverse-Core enabled?").color(NamedTextColor.RED));
+        MultiverseWorlds.Outcome created = MultiverseWorlds.create(id, World.Environment.NORMAL, false, true);
+        if (!created.ok()) {
+            getLogger().warning("Could not create lobby world '" + id + "': " + created.detail());
+            player.sendMessage(Component.text("The lobby world '").color(NamedTextColor.RED)
+                    .append(Component.text(id).color(NamedTextColor.YELLOW))
+                    .append(Component.text("' couldn't be created: ").color(NamedTextColor.RED))
+                    .append(Component.text(created.detail()).color(NamedTextColor.YELLOW))
+                    .append(Component.text(".").color(NamedTextColor.RED)));
             return;
         }
-
-        // Creation is synchronous, so the world should exist right away; double-check
-        // shortly after in case Multiverse is still finishing spawn setup.
-        Material lobbyIcon = icon; // effectively-final copy for the lambda below
-        World created = Bukkit.getWorld(id);
-        if (created != null) {
-            registerCreatedLobby(player, id, name, lobbyIcon);
-            return;
-        }
-        Bukkit.getScheduler().runTaskLater(this, () -> {
-            if (Bukkit.getWorld(id) != null) {
-                registerCreatedLobby(player, id, name, lobbyIcon);
-            } else {
-                player.sendMessage(Component.text("The lobby world '").color(NamedTextColor.RED)
-                        .append(Component.text(id).color(NamedTextColor.YELLOW))
-                        .append(Component.text("' couldn't be created. Check the console — the folder may already exist.").color(NamedTextColor.RED)));
-            }
-        }, 100L);
+        registerCreatedLobby(player, id, name, icon);
     }
 
     /** Registers a freshly created world as a lobby and teleports the admin into it. */
@@ -4767,7 +5350,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return List.of();
     }
     /** Builds the planet list: "Middle Earth" pinned first, then every loaded Multiverse world. */
-    private List<Planet> availablePlanets() {
+    List<Planet> availablePlanets() {
         String middleEarthWorld = getConfig().getString("middle-earth-world", "Middle_earth");
         Map<String, Material> overrides = iconOverrides();
 
@@ -4786,6 +5369,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 }
                 if (isPreviewWorld(planet.worldName())) {
                     continue; // temporary /planets preview worlds are never planets
+                }
+                if (spaceWorld != null && spaceWorld.isSpaceWorld(planet.worldName())) {
+                    continue; // the space between planets is not a destination
                 }
                 if (environment.isDisabledDimensionWorld(planet.worldName())) {
                     continue; // linked Nether/End of a dimension-disabled world
@@ -4857,6 +5443,14 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     }
 
     /** Custom menu icons from config.yml's "icons" section, keyed by lowercase world name. */
+    /** The icon configured for a world ({@code icons.<world>}), or the fallback. */
+    Material planetIcon(String worldName, Material fallback) {
+        if (worldName == null) {
+            return fallback;
+        }
+        return iconOverrides().getOrDefault(worldName.toLowerCase(Locale.ROOT), fallback);
+    }
+
     private Map<String, Material> iconOverrides() {
         Map<String, Material> overrides = new HashMap<>();
         ConfigurationSection section = getConfig().getConfigurationSection("icons");
@@ -4884,6 +5478,15 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     @Override
     public boolean hasEconomy() {
         return economy != null;
+    }
+
+    /**
+     * The Vault economy API itself, or null when Vault is absent. Exposed for
+     * the casino's wagering games, which need to hold a stake and pay out a
+     * pot as a single transaction rather than as two loose helper calls.
+     */
+    public net.milkbowl.vault.economy.Economy economy() {
+        return economy;
     }
 
     /** Get a player's money balance, or -1 when economy is not available. */
@@ -5417,6 +6020,11 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     }
 
     /** The sidebar scoreboard shown on every player's screen. */
+    /** The registry of /settings pages contributed by other plugins. */
+    ExternalSettings externalSettings() {
+        return externalSettings;
+    }
+
     SidebarScoreboard sidebarScoreboard() {
         return sidebar;
     }
@@ -5431,6 +6039,427 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     /** The friends system: friends, requests, presence, gifts and activity. */
     FriendSystem friendSystem() {
         return friendSystem;
+    }
+
+    // ── Personal music (/music) ─────────────────────────────────────────
+
+    /** Space travel: the star chart, the ship dock and the launch sequence. */
+    SpaceTravel spaceTravel() {
+        return spaceTravel;
+    }
+
+    /** The space world: the ship and the landing pads planets get (/ship). */
+    SpaceWorld spaceWorld() {
+        return spaceWorld;
+    }
+
+    /** The piloting sessions: who is flying their ship right now. */
+    ShipPilot shipPilot() {
+        return shipPilot;
+    }
+
+    /** The player's own on-demand songs and playlists. */
+    PlayerMusic playerMusic() {
+        return playerMusic;
+    }
+
+    /** Whether a /music song or playlist is running for this player. */
+    boolean personalMusicPlaying(Player player) {
+        return playerMusic != null && playerMusic.isPlaying(player.getUniqueId());
+    }
+
+    /**
+     * Whether the player pressed Stop in /music and hasn't moved on since. The
+     * soundtrack checks this too, so Stop doesn't immediately hand the MUSIC
+     * channel back to the planet's own track.
+     */
+    boolean personalMusicSilenced(Player player) {
+        return playerMusic != null && playerMusic.isSilenced(player);
+    }
+
+    // ── Space travel (/ship) ────────────────────────────────────────────
+
+    /**
+     * Space is flown, not clicked: while a player is up in the space world the
+     * star chart and the planet menus stay shut, so the only way on is to fly to a
+     * planet's pad and sneak. Returns true when the player was refused (and told
+     * why), leaving a docking ship to its own landing.
+     */
+    boolean refuseWhileFlying(Player player) {
+        if (spaceWorld == null || !spaceWorld.isSpaceWorld(player.getWorld())) {
+            return false;
+        }
+        player.closeInventory();
+        player.sendMessage(Component.text("\uD83D\uDE80 You're flying - ").color(NamedTextColor.GRAY)
+                .append(Component.text("fly into a planet's ring and sneak there to dock")
+                        .color(NamedTextColor.AQUA))
+                .append(Component.text(", or ").color(NamedTextColor.GRAY))
+                .append(Component.text("/ship leave").color(NamedTextColor.AQUA))
+                .append(Component.text(" to fly home.").color(NamedTextColor.GRAY)));
+        return true;
+    }
+
+    /**
+     * Handles /ship: takes off and flies, and lets an admin pin (or clear) the
+     * dock players board from, rebuild the sky, or open the star chart on the
+     * ground with /ship chart.
+     */
+    private void handleShipCommand(Player player, String[] args) {
+        if (spaceTravel == null || !spaceTravel.enabled()) {
+            player.sendMessage(Component.text("Space travel is switched off on this server.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("edit")) {
+            if (!canUseAdmin(player)) {
+                player.sendMessage(Component.text("Only admins can edit space.")
+                        .color(NamedTextColor.RED));
+                return;
+            }
+            if (spaceGuard != null) {
+                spaceGuard.toggleEditing(player);
+            }
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("pads")) {
+            // The planet pads are their own permission: /ship edit stops at them.
+            if (!canUseAdmin(player)) {
+                player.sendMessage(Component.text("Only admins can edit the planet pads.")
+                        .color(NamedTextColor.RED));
+                return;
+            }
+            if (spaceGuard != null) {
+                spaceGuard.togglePadEditing(player);
+            }
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("rebuild")) {
+            if (!canUseAdmin(player)) {
+                player.sendMessage(Component.text("Only admins can rebuild the space world.")
+                        .color(NamedTextColor.RED));
+                return;
+            }
+            if (spaceWorld == null || !spaceWorld.enabled()) {
+                player.sendMessage(Component.text("The space world is switched off.")
+                        .color(NamedTextColor.RED));
+                return;
+            }
+            spaceWorld.ensureReady();
+            int cleared = spaceWorld.rebuild();
+            if (cleared < 0) {
+                player.sendMessage(Component.text("The space world isn't loaded - ")
+                        .color(NamedTextColor.RED)
+                        .append(Component.text("/ship fly").color(NamedTextColor.AQUA))
+                        .append(Component.text(" once to make it.").color(NamedTextColor.RED)));
+                return;
+            }
+            player.sendMessage(Component.text("\uD83D\uDE80 Rebuilt space: the ship and ")
+                    .color(NamedTextColor.GREEN)
+                    .append(Component.text(spaceWorld.padCount() + " planet pad(s)")
+                            .color(NamedTextColor.YELLOW))
+                    .append(Component.text(cleared > 0
+                                    ? ", cleared " + cleared + " stale pad(s)." : ".")
+                            .color(NamedTextColor.GREEN)));
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("invite")) {
+            if (args.length < 2) {
+                player.sendMessage(Component.text("Invite who? ").color(NamedTextColor.GRAY)
+                        .append(Component.text("/ship invite <player>").color(NamedTextColor.AQUA))
+                        .append(Component.text(" asks them aboard with one click.")
+                                .color(NamedTextColor.GRAY)));
+                return;
+            }
+            if (shipPilot != null) {
+                shipPilot.invite(player, String.join(" ", Arrays.copyOfRange(args, 1, args.length)));
+            }
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("chart")) {
+            // The star chart is a ground tool: up in the sky it has no business.
+            if (refuseWhileFlying(player)) {
+                return;
+            }
+            spaceTravel.openStarChart(player);
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("ride")) {
+            if (shipPilot == null || spaceWorld == null || !spaceWorld.enabled()) {
+                player.sendMessage(Component.text("The space world is switched off - ")
+                        .color(NamedTextColor.RED)
+                        .append(Component.text("there's no ship to ride in.").color(NamedTextColor.RED)));
+                return;
+            }
+            // Riding along: with a name it is that pilot's ship, without one it is
+            // the only ship in the air. The pilot is told either way.
+            String pilot = args.length >= 2
+                    ? String.join(" ", Arrays.copyOfRange(args, 1, args.length)) : null;
+            shipPilot.ride(player, pilot);
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("fly")) {
+            if (shipPilot == null || spaceWorld == null || !spaceWorld.enabled()) {
+                player.sendMessage(Component.text("The space world is switched off - ")
+                        .color(NamedTextColor.RED)
+                        .append(Component.text("use the star chart's quick launch instead.")
+                                .color(NamedTextColor.RED)));
+                return;
+            }
+            // The name is only flavour: docking is what decides where you land.
+            String course = args.length >= 2
+                    ? String.join(" ", Arrays.copyOfRange(args, 1, args.length)) : null;
+            shipPilot.start(player, course);
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("leave")) {
+            if (shipPilot != null) {
+                shipPilot.flyHome(player);
+            }
+            return;
+        }
+        if (shipPilot != null && shipPilot.isRiding(player)) {
+            String with = shipPilot.ridingWith(player);
+            player.sendMessage(Component.text("\uD83E\uDDD1\u200D\uD83D\uDE80 Riding with ")
+                    .color(NamedTextColor.GRAY)
+                    .append(Component.text(with == null ? "the pilot" : with).color(NamedTextColor.AQUA))
+                    .append(Component.text(" - they land where they dock. ").color(NamedTextColor.GRAY))
+                    .append(Component.text("/ship leave").color(NamedTextColor.AQUA))
+                    .append(Component.text(" steps off.").color(NamedTextColor.GRAY)));
+            return;
+        }        if (shipPilot != null && shipPilot.isPiloting(player)) {
+            player.sendMessage(Component.text("You're flying. ").color(NamedTextColor.GRAY)
+                    .append(Component.text("Sneak in a planet's ring to dock").color(NamedTextColor.AQUA))
+                    .append(Component.text(" or ").color(NamedTextColor.GRAY))
+                    .append(Component.text("/ship leave").color(NamedTextColor.AQUA))
+                    .append(Component.text(" to fly home. Take riders with ").color(NamedTextColor.GRAY))
+                    .append(Component.text("/ship invite <player>").color(NamedTextColor.AQUA))
+                    .append(Component.text(".").color(NamedTextColor.GRAY)));
+            return;
+        }
+        // No sub-command: take off and fly. Space is flown rather than clicked, so
+        // the star chart waits on the ground (/ship chart) - up there the only way
+        // on is to fly to a planet's pad and sneak.
+        if (shipPilot != null && spaceWorld != null && spaceWorld.enabled()
+                && shipPilot.start(player, null)) {
+            return;
+        }
+        spaceTravel.openStarChart(player);
+    }
+
+    /**
+     * Handles /music: no arguments opens the song browser, and the small
+     * sub-commands cover the shortcuts players ask for by name.
+     */
+    private void handleMusicCommand(Player player, String[] args) {
+        if (playerMusic == null || !playerMusic.enabled()) {
+            player.sendMessage(Component.text("Personal music is disabled on this server.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        if (args.length == 0) {
+            player.closeInventory();
+            new MusicMenu(this, player).open(player);
+            return;
+        }
+        if (args[0].equalsIgnoreCase("help")) {
+            printMusicHelp(player);
+            return;
+        }
+        if (args[0].equalsIgnoreCase("next")) {
+            if (playerMusic.next(player)) {
+                player.sendMessage(Component.text("\u23ED Skipped to the next song.")
+                        .color(NamedTextColor.GREEN));
+            } else {
+                player.sendMessage(Component.text("Nothing is playing right now.")
+                        .color(NamedTextColor.GRAY));
+            }
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("stop")) {
+            boolean wasPlaying = playerMusic.stop(player);
+            player.sendMessage(Component.text("\u23F9 Music stopped.").color(NamedTextColor.GRAY));
+            player.sendMessage(Component.text(wasPlaying
+                    ? "The planet soundtrack stays quiet here until you move on or ask for music again."
+                    : "Nothing of yours was playing - music is already quiet here.")
+                    .color(NamedTextColor.DARK_GRAY));
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("playlists")) {
+            player.closeInventory();
+            new MusicPlaylistsMenu(this, player).open(player);
+            return;
+        }
+        if (args.length >= 2 && args[0].equalsIgnoreCase("play")) {
+            String query = String.join(" ", Arrays.copyOfRange(args, 1, args.length));
+            Sound sound = resolveMusicSound(query);
+            if (sound == null) {
+                player.sendMessage(Component.text("No song matches '").color(NamedTextColor.RED)
+                        .append(Component.text(query).color(NamedTextColor.YELLOW))
+                        .append(Component.text("'. Open /music to browse them all.").color(NamedTextColor.RED)));
+                return;
+            }
+            playerMusic.playNow(player, sound);
+            player.sendMessage(Component.text("\u25B6 Now playing: ").color(NamedTextColor.GREEN)
+                    .append(Component.text(PlayerMusic.pretty(sound.name())).color(NamedTextColor.YELLOW)));
+            return;
+        }
+        // Anything left is a name: one of their playlists first, then a song.
+        String query = String.join(" ", args);
+        if (startNamedPlaylist(player, query)) {
+            return;
+        }
+        Sound named = resolveMusicSound(query);
+        if (named != null) {
+            playerMusic.playNow(player, named);
+            player.sendMessage(Component.text("\u25B6 Now playing: ").color(NamedTextColor.GREEN)
+                    .append(Component.text(PlayerMusic.pretty(named.name())).color(NamedTextColor.YELLOW)));
+            return;
+        }
+        player.sendMessage(Component.text("No playlist or song called '").color(NamedTextColor.RED)
+                .append(Component.text(query).color(NamedTextColor.YELLOW))
+                .append(Component.text("'. ").color(NamedTextColor.RED))
+                .append(Component.text("/music playlists").color(NamedTextColor.AQUA))
+                .append(Component.text(" shows your lists, ").color(NamedTextColor.RED))
+                .append(Component.text("/music").color(NamedTextColor.AQUA))
+                .append(Component.text(" browses every song.").color(NamedTextColor.RED)));
+        player.closeInventory();
+        new MusicMenu(this, player).open(player);
+    }
+
+    /** The short /music cheat-sheet, with the playlist shortcut spelled out. */
+    private void printMusicHelp(Player player) {
+        player.sendMessage(Component.text("\uD83C\uDFB5 /music").color(NamedTextColor.GOLD)
+                .append(Component.text(" - browse every song this server has").color(NamedTextColor.GRAY)));
+        player.sendMessage(Component.text("\uD83C\uDFB5 /music play <song>").color(NamedTextColor.GOLD)
+                .append(Component.text(" - play one song right now").color(NamedTextColor.GRAY)));
+        player.sendMessage(Component.text("\uD83C\uDFB5 /music <playlist>").color(NamedTextColor.GOLD)
+                .append(Component.text(" - start one of your playlists (tab-completes)")
+                        .color(NamedTextColor.GRAY)));
+        player.sendMessage(Component.text("\uD83C\uDFB5 /music playlists").color(NamedTextColor.GOLD)
+                .append(Component.text(" - make, rename, reorder and delete playlists")
+                        .color(NamedTextColor.GRAY)));
+        for (PlayerMusic.Playlist playlist : playerMusic.playlists(player.getUniqueId())) {
+            player.sendMessage(Component.text("   \u2022 " + playlist.name()).color(NamedTextColor.AQUA)
+                    .append(Component.text(" (" + playlist.songs().size() + " songs)")
+                            .color(NamedTextColor.DARK_GRAY)));
+        }
+        player.sendMessage(Component.text("\uD83C\uDFB5 /music next | /music stop").color(NamedTextColor.GOLD)
+                .append(Component.text(" - skip a song / silence everything").color(NamedTextColor.GRAY)));
+    }
+
+    /**
+     * Starts one of the player's playlists by name, the way {@code /music
+     * <playlist>} does it.
+     *
+     * @return false when they have no playlist by that name
+     */
+    private boolean startNamedPlaylist(Player player, String name) {
+        PlayerMusic.Playlist playlist = playerMusic.playlist(player.getUniqueId(), name);
+        if (playlist == null) {
+            return false;
+        }
+        if (!playerMusic.startPlaylist(player, playlist.name(), 0)) {
+            player.sendMessage(Component.text("\uD83D\uDCD6 ").color(NamedTextColor.RED)
+                    .append(Component.text(playlist.name()).color(NamedTextColor.YELLOW))
+                    .append(Component.text(" has no songs yet - opening it so you can add some.")
+                            .color(NamedTextColor.RED)));
+            player.closeInventory();
+            new MusicPlaylistEditMenu(this, player, playlist.name()).open(player);
+            return true;
+        }
+        player.sendMessage(Component.text("\u25B6 Playing playlist ").color(NamedTextColor.GREEN)
+                .append(Component.text(playlist.name()).color(NamedTextColor.YELLOW))
+                .append(Component.text(" - " + playlist.songs().size() + " songs, looping. ")
+                        .color(NamedTextColor.GREEN))
+                .append(Component.text("/music next").color(NamedTextColor.AQUA))
+                .append(Component.text(" skips ahead, ").color(NamedTextColor.GREEN))
+                .append(Component.text("/music stop").color(NamedTextColor.AQUA))
+                .append(Component.text(" ends it.").color(NamedTextColor.GREEN)));
+        return true;
+    }
+
+    /** Asks in chat for the new name of one of the player's playlists. */
+    void promptRenamePlaylist(Player player, String playlistName) {
+        if (playerMusic == null) {
+            return;
+        }
+        PlayerMusic.Playlist playlist = playerMusic.playlist(player.getUniqueId(), playlistName);
+        if (playlist == null) {
+            return;
+        }
+        pendingPlaylistRenames.put(player.getUniqueId(), playlist.name());
+        player.closeInventory();
+        player.sendMessage(Component.text("\u270F Type the new name for the playlist ")
+                .color(NamedTextColor.YELLOW)
+                .append(Component.text(playlist.name()).color(NamedTextColor.AQUA))
+                .append(Component.text(" in chat, or ").color(NamedTextColor.YELLOW))
+                .append(Component.text("cancel").color(NamedTextColor.RED))
+                .append(Component.text(" to keep it.").color(NamedTextColor.YELLOW)));
+        player.sendMessage(Component.text("Up to " + PlayerMusic.maxNameLength()
+                        + " characters, and no dots. Afterwards ").color(NamedTextColor.GRAY)
+                .append(Component.text("/music <name>").color(NamedTextColor.AQUA))
+                .append(Component.text(" starts it from chat.").color(NamedTextColor.GRAY)));
+    }
+
+    /** Applies the answer to a playlist rename prompt and reopens the playlist. */
+    private void applyPlaylistRename(Player player, String playlistName, String input) {
+        if (playerMusic == null) {
+            return;
+        }
+        if (input.isEmpty() || input.equalsIgnoreCase("cancel")) {
+            player.sendMessage(Component.text("\uD83D\uDCD6 Playlist rename cancelled.")
+                    .color(NamedTextColor.GRAY));
+            reopenPlaylistEditor(player, playlistName);
+            return;
+        }
+        switch (playerMusic.renamePlaylist(player.getUniqueId(), playlistName, input)) {
+            case OK -> {
+                player.sendMessage(Component.text("\u270F Renamed to ").color(NamedTextColor.GREEN)
+                        .append(Component.text(input).color(NamedTextColor.AQUA))
+                        .append(Component.text(". Start it with ").color(NamedTextColor.GREEN))
+                        .append(Component.text("/music " + input).color(NamedTextColor.AQUA))
+                        .append(Component.text(".").color(NamedTextColor.GREEN)));
+                reopenPlaylistEditor(player, input);
+            }
+            case TAKEN -> {
+                player.sendMessage(Component.text("You already have a playlist called ")
+                        .color(NamedTextColor.RED)
+                        .append(Component.text(input).color(NamedTextColor.YELLOW))
+                        .append(Component.text(".").color(NamedTextColor.RED)));
+                reopenPlaylistEditor(player, playlistName);
+            }
+            case INVALID -> {
+                player.sendMessage(Component.text("A playlist name can't be empty or contain a dot.")
+                        .color(NamedTextColor.RED));
+                reopenPlaylistEditor(player, playlistName);
+            }
+            case TOO_LONG -> {
+                player.sendMessage(Component.text("That name is too long - keep it to "
+                                + PlayerMusic.maxNameLength() + " characters or fewer.")
+                        .color(NamedTextColor.RED));
+                reopenPlaylistEditor(player, playlistName);
+            }
+            default -> reopenPlaylistEditor(player, playlistName);
+        }
+    }
+
+    /** Reopens a playlist's editor after its chat prompt finished. */
+    private void reopenPlaylistEditor(Player player, String playlistName) {
+        player.closeInventory();
+        new MusicPlaylistEditMenu(this, player, playlistName).open(player);
+    }
+
+    /** Resolves a "/music play &lt;name&gt;" query to one of the server's music sounds. */
+    private static Sound resolveMusicSound(String query) {
+        String trimmed = query.trim();
+        String key = trimmed.toUpperCase(Locale.ROOT).replace(' ', '_').replace('-', '_');
+        for (String name : PlanetMusic.musicSoundNames()) {
+            if (name.equals(key) || PlayerMusic.pretty(name).equalsIgnoreCase(trimmed)) {
+                return PlanetMusic.sound(name);
+            }
+        }
+        Sound direct = PlanetMusic.sound(key);
+        return direct != null && direct.name().startsWith("MUSIC") ? direct : null;
     }
 
     /** The latest data-centre snapshot for a player, or null when there is none. */
@@ -6104,8 +7133,12 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      *
      * <p>Available: {@code %planet% %world% %balance% %x% %y% %z% %players%
      * %visitors%}, anything about the player ({@code %player% %playtime%
-     * %deaths% %kills% %planets% %neb%}) and, on a player-owned planet,
-     * {@code %members% %blocks% %block-limit% %size% %next-size%}.
+     * %deaths% %kills% %planets% %neb% %bounty%}) and, on a player-owned
+     * planet, {@code %members% %blocks% %block-limit% %size% %next-size%}.
+     *
+     * <p>{@code %bounty%} is whatever a Hud-Service plugin (the bounty board)
+     * publishes through {@link PlanetariumHudService}; with none installed it
+     * reads 0.
      */
     String renderHudTemplate(Player player, String template) {
         World world = player.getWorld();
@@ -6116,6 +7149,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         // lookups that reach another plugin (the economy, PlaceholderAPI) or a
         // player's statistics only run for the placeholders actually in use.
         boolean wantsBalance = template.contains("%balance%");
+        boolean wantsBounty = template.contains("%bounty%");
         boolean wantsNeb = template.contains("%neb%");
         boolean wantsDeaths = template.contains("%deaths%");
         boolean wantsKills = template.contains("%kills%");
@@ -6155,6 +7189,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             rendered = rendered.replace("%balance%",
                     formatPrice(hasEconomy() ? getBalance(player) : 0));
         }
+        if (wantsBounty) {
+            Double bounty = bountyTotalFor(player.getUniqueId());
+            rendered = rendered.replace("%bounty%", formatPrice(bounty == null ? 0 : bounty));
+        }
         if (wantsNeb) {
             rendered = rendered.replace("%neb%", formatPrice(nebValue(player)));
         }
@@ -6171,6 +7209,35 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     String.valueOf(planetsOwned(player.getUniqueId())));
         }
         return rendered;
+    }
+
+    /** The HUD numbers other plugins publish, looked up once and kept. */
+    private volatile PlanetariumHudService hudService;
+
+    /**
+     * The money another plugin has put on this player's head, or null when no
+     * plugin is publishing numbers (the placeholder then draws 0). The service
+     * is found on first use, and looked for again whenever it was absent, so a
+     * plugin that enables after this one is still picked up.
+     */
+    private Double bountyTotalFor(UUID uuid) {
+        PlanetariumHudService service = hudService;
+        if (service == null) {
+            RegisteredServiceProvider<PlanetariumHudService> registration =
+                    getServer().getServicesManager().getRegistration(PlanetariumHudService.class);
+            service = registration == null ? null : registration.getProvider();
+            if (service != null) {
+                hudService = service;
+            } else {
+                return null;
+            }
+        }
+        try {
+            return service.number("bounty", uuid);
+        } catch (RuntimeException | LinkageError ex) {
+            // A misbehaving provider must not break the sidebar; draw 0.
+            return null;
+        }
     }
 
     /** A player's own statistic, or 0 when the server cannot read it. */
@@ -6436,7 +7503,34 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 || pendingDeletes.containsKey(id) || helpChatSearch.containsKey(id)
                 || pendingLobbyEdits.containsKey(id) || pendingHomePrompts.containsKey(id)
                 || pendingHudNames.containsKey(id)
+                || pendingPlaylistRenames.containsKey(id)
                 || (friendSystem != null && friendSystem.hasPrompt(player));
+    }
+
+    /**
+     * Writes the sidebar's own resource pack beside {@code config.yml} and says
+     * where it went and what its SHA-1 is, so a server owner can host it and
+     * set {@code resource-pack.url}/{@code .sha1} — or drop it into a client's
+     * {@code resourcepacks} folder to see it without hosting anything. Only
+     * written when {@code sidebar.fine-padding} is on, because it is the only
+     * thing that asks for the glyphs it adds.
+     */
+    private void prepareSidebarPack() {
+        File pack = SidebarPack.write(this);
+        if (pack == null) {
+            getLogger().warning("sidebar.fine-padding is on, but the resource pack could not be "
+                    + "written; the sidebar will keep padding with whole spaces.");
+            return;
+        }
+        getLogger().info("sidebar.fine-padding is on. The pack is " + pack.getPath()
+                + " (sha1 " + SidebarPack.sha1(pack) + ")");
+        if (!getConfig().getBoolean("resource-pack.enabled", false)
+                || getConfig().getString("resource-pack.url", "").isBlank()) {
+            getLogger().warning("No resource pack is configured, so a client without this one "
+                    + "would draw the padding as missing glyphs: host the pack and set "
+                    + "resource-pack.url and resource-pack.sha1, or set sidebar.fine-padding back "
+                    + "to false.");
+        }
     }
 
     /**
@@ -6546,11 +7640,6 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             sender.sendMessage(Component.text("Only players can send teleport requests.").color(NamedTextColor.RED));
             return;
         }
-        if (!player.hasPermission("planets.settings")) {
-            player.sendMessage(Component.text("You don't have permission to send teleport requests.")
-                    .color(NamedTextColor.RED));
-            return;
-        }
         if (args.length < 1) {
             player.sendMessage(Component.text("Usage: " + (here ? "/tpahere <player>" : "/tpa <player>"))
                     .color(NamedTextColor.YELLOW));
@@ -6563,15 +7652,35 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     .append(Component.text("' is not online.").color(NamedTextColor.RED)));
             return;
         }
+        sendTeleportRequest(player, target, here);
+    }
+
+    /**
+     * Sends a teleport request, with the same checks and the same wording the
+     * commands use. Shared with the friends menu, where the teleport button on a
+     * friend's profile asks for exactly the same thing without anybody having to
+     * type a name.
+     *
+     * @param player the player asking (they travel when {@code here} is false)
+     * @param target the online player being asked
+     * @param here   true for "/tpahere" — ask them to come to the asker instead
+     * @return whether the request was sent, so a menu can redraw either way
+     */
+    boolean sendTeleportRequest(Player player, Player target, boolean here) {
+        if (!player.hasPermission("planets.settings")) {
+            player.sendMessage(Component.text("You don't have permission to send teleport requests.")
+                    .color(NamedTextColor.RED));
+            return false;
+        }
         if (target.getUniqueId().equals(player.getUniqueId())) {
             player.sendMessage(Component.text("You can't teleport to yourself.").color(NamedTextColor.RED));
-            return;
+            return false;
         }
         if (!playerSettings.get(target.getUniqueId(), PlayerSettings.Setting.TP_REQUESTS)
                 && !player.hasPermission("planets.settings.bypass")) {
             player.sendMessage(Component.text(target.getName()).color(NamedTextColor.YELLOW)
                     .append(Component.text(" has teleport requests turned off.").color(NamedTextColor.RED)));
-            return;
+            return false;
         }
         tpaRequests.put(target.getUniqueId(),
                 new TpaRequest(player.getUniqueId(), player.getName(), here, System.currentTimeMillis()));
@@ -6590,6 +7699,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .clickEvent(ClickEvent.runCommand("/tpdeny " + player.getName()))
                 .hoverEvent(HoverEvent.showText(Component.text("Decline the teleport")));
         target.sendMessage(accept.append(Component.text("   ")).append(deny));
+        return true;
     }
 
     /** /tpaccept [player] — performs the pending teleport. */
@@ -6932,6 +8042,12 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             inviter.sendMessage(Component.text("Only the owner, co-owner, or moderator can invite players.").color(NamedTextColor.RED));
             return false;
         }
+        // A per-player permission the owner can switch off for one member.
+        if (!data.permission(inviter.getUniqueId(), MyPlanetData.Permission.INVITE)) {
+            inviter.sendMessage(Component.text("You don't have the Invite Players permission on this planet.")
+                    .color(NamedTextColor.RED));
+            return false;
+        }
         if (data.isMember(targetId)) {
             inviter.sendMessage(Component.text(targetName).color(NamedTextColor.YELLOW)
                     .append(Component.text(" is already a member of ").color(NamedTextColor.RED))
@@ -7088,18 +8204,33 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 return;
             }
         }
+        acceptInvite(player, data);
+    }
+
+    /**
+     * Accepts a pending invitation: adds the player as a member and tells the
+     * owner. Shared by {@code /myp accept} and by the star chart, where flying
+     * to a planet you were invited to accepts the invitation on the way.
+     *
+     * @return whether they are a member now
+     */
+    boolean acceptInvite(Player player, MyPlanetData data) {
+        if (data == null) {
+            return false;
+        }
         if (!data.isInvited(player.getUniqueId())) {
-            player.sendMessage(Component.text("You don't have a pending invitation to ").color(NamedTextColor.RED)
+            player.sendMessage(Component.text("You don't have a pending invitation to ")
+                    .color(NamedTextColor.RED)
                     .append(Component.text(data.displayName()).color(NamedTextColor.YELLOW))
                     .append(Component.text(".").color(NamedTextColor.RED)));
-            return;
+            return false;
         }
         // Check member capacity
         if (data.totalMembers() >= data.memberCapacity()) {
             player.sendMessage(Component.text("Planet ").color(NamedTextColor.RED)
                     .append(Component.text(data.displayName()).color(NamedTextColor.YELLOW))
                     .append(Component.text(" has reached its member capacity.").color(NamedTextColor.RED)));
-            return;
+            return false;
         }
         // Accept: add as MEMBER, remove invitation
         data.revokeInvitation(player.getUniqueId());
@@ -7116,6 +8247,82 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     .append(Component.text(data.displayName()).color(NamedTextColor.YELLOW))
                     .append(Component.text(".").color(NamedTextColor.GREEN)));
         }
+        return true;
+    }
+
+    /**
+     * The star chart's way in: accepts a pending invitation to the planet with
+     * this world name, when there is one waiting.
+     */
+    boolean acceptPlanetInvite(Player player, String worldName) {
+        MyPlanetData data = myPlanetManager == null ? null : myPlanetManager.get(worldName);
+        if (data == null) {
+            return false;
+        }
+        return acceptInvite(player, data);
+    }
+
+    /**
+     * Asks a planet's owner to let this player in, from the star chart. The
+     * owner answers it from {@code /myp → Visit Requests}.
+     *
+     * @return whether the request was recorded
+     */
+    boolean requestPlanetVisit(Player player, String worldName) {
+        if (myPlanetManager == null) {
+            return false;
+        }
+        MyPlanetData data = myPlanetManager.get(worldName);
+        if (data == null) {
+            player.sendMessage(Component.text("That planet isn't owned by a player - it needs no invite.")
+                    .color(NamedTextColor.GRAY));
+            return false;
+        }
+        if (data.isMember(player.getUniqueId())) {
+            player.sendMessage(Component.text("You're already a member of ").color(NamedTextColor.GREEN)
+                    .append(Component.text(data.displayName()).color(NamedTextColor.YELLOW))
+                    .append(Component.text(" - click it again to fly there.").color(NamedTextColor.GREEN)));
+            return false;
+        }
+        switch (data.requestVisit(player.getUniqueId())) {
+            case ALREADY_INVITED -> {
+                player.sendMessage(Component.text("You already have an invitation to ")
+                        .color(NamedTextColor.GREEN)
+                        .append(Component.text(data.displayName()).color(NamedTextColor.YELLOW))
+                        .append(Component.text(" - click the planet to accept it and fly.")
+                                .color(NamedTextColor.GREEN)));
+                return false;
+            }
+            case ALREADY_REQUESTED -> {
+                player.sendMessage(Component.text("You already asked to visit ")
+                        .color(NamedTextColor.GRAY)
+                        .append(Component.text(data.displayName()).color(NamedTextColor.YELLOW))
+                        .append(Component.text(" - " + adminOwnerName(data)).color(NamedTextColor.YELLOW))
+                        .append(Component.text(" hasn't answered yet.").color(NamedTextColor.GRAY)));
+                return false;
+            }
+            default -> {
+            }
+        }
+        myPlanetManager.save();
+        player.sendMessage(Component.text("\uD83D\uDCE8 Visit request sent to ").color(NamedTextColor.GREEN)
+                .append(Component.text(adminOwnerName(data)).color(NamedTextColor.YELLOW))
+                .append(Component.text(" for ").color(NamedTextColor.GREEN))
+                .append(Component.text(data.displayName()).color(NamedTextColor.YELLOW))
+                .append(Component.text(". They answer from ").color(NamedTextColor.GREEN))
+                .append(Component.text("/myp").color(NamedTextColor.AQUA))
+                .append(Component.text(" \u2192 Visit Requests.").color(NamedTextColor.GREEN)));
+        Player owner = Bukkit.getPlayer(data.ownerUuid());
+        if (owner != null) {
+            owner.sendMessage(Component.text("\uD83D\uDCE8 ").color(NamedTextColor.GOLD)
+                    .append(Component.text(player.getName()).color(NamedTextColor.YELLOW))
+                    .append(Component.text(" wants to visit ").color(NamedTextColor.GOLD))
+                    .append(Component.text(data.displayName()).color(NamedTextColor.YELLOW))
+                    .append(Component.text(" - answer it in ").color(NamedTextColor.GOLD))
+                    .append(Component.text("/myp").color(NamedTextColor.AQUA))
+                    .append(Component.text(" \u2192 Visit Requests.").color(NamedTextColor.GOLD)));
+        }
+        return true;
     }
 
     // ── /myp deny ────────────────────────────────────────────────────────
@@ -7819,6 +9026,20 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * Moves a kicked visitor out of a planet instantly: to their own planet
      * when they have one, otherwise to the main world's spawn. Used by the
      * owner's "Kick Visitors" button in /myp.
+     */
+    /**
+     * Whether this player may kick visitors off a planet: the owner and
+     * co-owners always can, and so can any member the owner granted the
+     * per-player Kick Visitors permission.
+     */
+    boolean canKickVisitors(MyPlanetData planet, Player player) {
+        return planet.canManage(player.getUniqueId())
+                || planet.permission(player.getUniqueId(), MyPlanetData.Permission.KICK_VISITORS);
+    }
+
+    /**
+     * Instantly moves a visitor out of the planet: to their own planet's spawn
+     * when they have one, otherwise to the main world's spawn.
      */
     void kickVisitorFromPlanet(Player visitor, MyPlanetData planet) {
         visitor.sendMessage(Component.text("You were kicked from ").color(NamedTextColor.RED)
@@ -9681,16 +10902,19 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * Loads a world that Multiverse left unloaded, keeping its own generator
      * settings (the world's level.dat), or returns null when there is no folder.
      */
-    private World loadWorldNow(String worldName) {
+    World loadWorldNow(String worldName) {
         World loaded = Bukkit.getWorld(worldName);
         if (loaded != null) {
             return loaded;
         }
-        if (!new File(Bukkit.getWorldContainer(), worldName).isDirectory()) {
+        if (!worldFolderExists(worldName)) {
             return null;
         }
-        getServer().dispatchCommand(getServer().getConsoleSender(), "mv load " + worldName);
-        return Bukkit.getWorld(worldName);
+        MultiverseWorlds.Outcome loadResult = MultiverseWorlds.load(worldName);
+        if (!loadResult.ok()) {
+            getLogger().warning("Could not load world '" + worldName + "': " + loadResult.detail());
+        }
+        return loadResult.world() != null ? loadResult.world() : Bukkit.getWorld(worldName);
     }
 
     /**
@@ -9761,7 +10985,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             PlanetTerrain.ensureFloor(world, worldName, spec);
         }
         // Register it with Multiverse again, so it behaves like the planet it was.
-        getServer().dispatchCommand(getServer().getConsoleSender(), "mv import " + worldName + " normal");
+        MultiverseWorlds.Outcome imported = MultiverseWorlds.importWorld(worldName, World.Environment.NORMAL);
+        if (!imported.ok()) {
+            getLogger().warning("Could not register '" + worldName + "' with Multiverse: " + imported.detail());
+        }
 
         actor.sendMessage(Component.text("\u267B Regenerated ").color(NamedTextColor.GREEN)
                 .append(Component.text(worldName).color(NamedTextColor.YELLOW))
@@ -9838,6 +11065,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     /** Opens the public /planets menu (planet browser) for a player. */
     void openPlanetsMenu(Player player) {
+        if (refuseWhileFlying(player)) {
+            return;
+        }
         player.closeInventory();
         List<Planet> planets = availablePlanets();
         new PlanetsMenu(this, planets, player).open(player);

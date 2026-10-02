@@ -95,11 +95,22 @@ station-rescue-mode:
 # wear a helmet. If "helmets" is empty, any helmet protects; otherwise only the
 # listed materials do. Creative/spectator players and holders of
 # "planets.atmosphere.bypass" are immune.
-# Set with "/planets world <planet> atmosphere <damage|off> [helmet material...]".
+# Set with "/planets world <planet> atmosphere <damage|on|off> [helmet material...]".
+# "on" uses atmosphere-default-damage below.
 atmospheres:
   # Venus:
   #   damage: 2             # health points per second (2 = one heart)
   #   helmets: [NETHERITE_HELMET]
+
+# Damage per second "/planets world <planet> atmosphere on" applies (2 = one heart).
+atmosphere-default-damage: 2.0
+
+# Spawn limits saved by "/planets world <planet> monsters|animals|ambient|water <count>".
+# Bukkit only keeps per-world spawn limits in memory, so the plugin re-applies
+# these whenever a world loads; there is no reason to edit this by hand.
+spawn-limits:
+  # nebula:
+  #   animals: 50
 
 # Worlds whose Nether/End dimension linking is disabled: portals are blocked and
 # the linked <world>_nether / <world>_the_end worlds are hidden from /planets,
@@ -201,6 +212,90 @@ music:
     #   - "MUSIC_OVERWORLD_MEADOW:210"
     #   - "MUSIC_OVERWORLD_CHERRY_GROVE:240"
 
+# Personal music (/music): every player can play any vanilla song on demand
+# and build small playlists that loop. Separate from the soundtrack above —
+# this only ever plays what somebody asked for, stored per player in
+# player-music.yml.
+personal-music:
+  # Turn the whole feature off (the /music command then explains itself).
+  enabled: true
+  # Played at this volume, 0.0 – 1.0 (same MUSIC channel as the soundtrack).
+  volume: 0.7
+  # How many playlists one player may keep.
+  max-playlists: 5
+  # How many songs one playlist may hold.
+  max-songs-per-playlist: 10
+  # Vanilla track lengths aren't readable, so a playlist books its next song
+  # this many seconds after the current one starts. Songs can always be
+  # skipped by hand with the Next Song button.
+  track-seconds: 240
+
+# Space travel (/ship): a ship you board to fly to other planets.
+# The star chart lists the server's public planets plus every player's own
+# planet; one nobody has landed on yet reads as ??? on your chart until you fly
+# there. Landing itself follows the same rules /planets uses - landing mode,
+# safe spots, cooldowns, combat tags - and a planet that is private can only be
+# entered by its members and the players its owner invited.
+space-travel:
+  # Turn the whole feature off (the /ship command then explains itself).
+  enabled: true
+  # How long a launch takes before the player lands, in seconds (0 = instant,
+  # capped at 10).
+  flight-seconds: 3
+  # How long a player must wait between two trips into space, in seconds
+  # (0 turns it off, capped at an hour). It covers taking off (/ship, /ship fly)
+  # and coming aboard someone else's ship (/ship ride), so the ship is a ride
+  # rather than a lift. Nobody can head up while in combat either.
+  takeoff-cooldown-seconds: 30
+  # The flight layer: the void world your ship really flies around in, with one
+  # landing pad per planet. /ship takes off straight into it (the star chart waits
+  # on the ground, at /ship chart): fly to a pad, sneak, and the normal landing
+  # puts you down on the planet (invite-only planets still refuse). Left-clicking a
+  # planet on the chart also flies there yourself; right-clicking is the quick
+  # launch above.
+  #
+  # A pilot takes their ship with them - a real Minecraft boat they sit in, the
+  # oak boat or the chest boat they picked in /settings - and anyone can come
+  # along as a passenger with /ship ride <pilot>, landing wherever the pilot
+  # docks. The sky is kept harmless for everyone in it: no PvP, no fall, fire or
+  # drowning damage, no mobs spawning, and nothing can be built here.
+  # The landing is only a request until the planet takes you, so flying out of a
+  # ring simply cancels the landing and leaves the ship in the air.
+  space:
+    enabled: true
+    # The world the ship flies in. Made on the first take-off - nothing but air
+    # and stars - and never listed as a planet of its own.
+    world: planets_space
+    # Cruise altitude: the ship and every planet's pad sit at this height.
+    ship-y: 96
+    # How far out the ring of planet pads starts.
+    ring-radius: 120
+    # How close the ship must get to a pad before sneaking docks you.
+    dock-radius: 12
+    # Nothing in space can be mined, placed, burnt or blown up - by anyone,
+    # admins included, so nobody clears a hole in a pad while looking around.
+    # The pads' floating labels and the ships are protected too. Editing is split
+    # in two, because a pad is not the same thing as the ship:
+    #   /ship edit  - an admin can build on the ship and in the open sky, but
+    #                 never on a planet's pad (everyone lands on those).
+    #   /ship pads  - an admin can change the landing pads themselves.
+    # Both are toggles: run them again to switch editing back off, or use
+    # /ship rebuild to re-lay the ship and every pad and clear away the pads of
+    # planets that no longer exist. Built pads are remembered in built-pads below,
+    # so a restart never rebuilds the sky.
+    # Set this to true instead if you'd rather admins could always build here
+    # (pads included).
+    admins-can-build: false
+    # Flight speed: 0.05 is normal creative flight. Sprinting opens the throttle.
+    speed: 0.08
+    sprint-speed: 0.16
+    # How many players may ride along in one ship (0 turns riding off).
+    # A passenger boards with /ship ride <pilot>, is carried along beside the
+    # ship while they look around, and lands wherever the pilot docks. They step
+    # off with /ship leave, and go back where they boarded if the pilot's flight
+    # ends early (log out, /ship leave, or a planet refusing the landing).
+    max-riders: 3
+
 # My Planet system settings.
 # Players own planets and manage them from the /myp control panel
 # (members, upgrades, settings...). Owned planets are hidden from the
@@ -293,7 +388,7 @@ hud:
 # Each player gets their own copy, so the numbers in it are theirs. The whole
 # sidebar is switched on or off per player from /settings → Sidebar, and
 # right-clicking that item opens the line picker, where a player chooses which
-# of the lines below they want and in what order.
+# of the lines below they want, in what order, and what colour each one draws in.
 sidebar:
   # Switch the sidebar off for the whole server.
   enabled: true
@@ -302,11 +397,35 @@ sidebar:
   # The heading drawn above the lines.
   title: "PLANETARIUM SMP"
   title-color: gold
+  # The colour of any line that asks for none of its own, and the colour a line
+  # falls back to after "&r".
   line-color: white
+  # Pad the label and value columns with the blank glyphs the plugin's own
+  # resource pack adds — one, two, three and four pixels wide — instead of whole
+  # spaces, so every "|" and every value ends on exactly the same pixel. A space
+  # is the only blank glyph the client has of its own and it is 4 px wide, so
+  # without the pack a column can only be padded in steps of four and lands up
+  # to two pixels out. Turning this on writes the pack to
+  # plugins/Planets/resourcepack/planetarium-pack.zip: host it and set
+  # "resource-pack.url" below, or drop it into a client's resourcepacks folder.
+  # Leave it off unless every client can have the pack.
+  fine-padding: false
   # One entry per line, top to bottom. "label" is the name players see in the
   # picker; a line's id is worked out from its label, so renaming one resets
   # that line to the default for players who had customised their sidebar.
   # At most 14 lines are drawn (the client fits the title plus 14 rows).
+  #
+  # A template can hold as many colours as it likes, written as "&" codes
+  # wherever the colour should change: "&6" gold, "&7" grey, "&8" dark grey,
+  # "&c" red, "&a" green, "&e" yellow, "&b" aqua, "&d" pink, "&f" white, and
+  # "&l" bold, "&o" italic, "&r" back to line-color. The "|" between the two
+  # halves of each line below is how the shipped sidebar separates a label from
+  # its number — plain text, so any template can use its own separators.
+  #
+  # A player can recolour any line for themselves from /settings → Sidebar:
+  # shift-left-click the line and pick a colour. That choice is theirs alone,
+  # is saved in player-settings.yml the moment they click, and leaves the
+  # colours below exactly as they are for everybody else.
   #
   # Placeholders:  %player% %balance% %neb% %playtime% %deaths% %kills%
   #                %planets% %planet% %world% %x% %y% %z% %players%
@@ -320,28 +439,37 @@ sidebar:
   # %cards% renders the same way for the Entity Card Hunt — e.g. "47/82"
   # unique cards found, with %cards-copies% for the total copies and
   # %cards-time% for the time left (e.g. "13d 7h").
+  # The first row is the rule: a plain grey line of dashes drawn directly under
+  # the title, with no label and no value. It is what separates the heading and
+  # the player's name from the numbers below. Delete it for a barer board.
   lines:
+    - label: "Separator"
+      template: "&7--------------------"
     - label: "Player"
-      template: "%player%"
+      template: "&b%player%"
     - label: "Balance"
-      template: "%balance% ₾"
+      template: "&7Balance    &8| &6%balance% &e₾"
     - label: "Friends"
-      template: "Friends: %friends%"
+      template: "&7Friends     &8| &a%friends%"
     - label: "Playtime"
-      template: "⏱ %playtime%"
-    - label: "Deaths"
-      template: "☠ %deaths%"
+      template: "&7Playtime   &8| &b%playtime%"
     - label: "Kills"
-      template: "⚔ %kills%"
+      template: "&7Kills      &8| &d%kills%"
+    - label: "Deaths"
+      template: "&7Deaths     &8| &c%deaths%"
+    - label: "Bounty"
+      template: "&7Bounty     &8| &c%bounty% &e₾"
     # Examples you can turn on by deleting the "#":
     # - label: "Planets"
-    #   template: "🪐 %planets% planets"
+    #   template: "&7Planets &8| &a🪐 %planets%"
     # - label: "Where"
-    #   template: "📍 %planet%"
+    #   template: "&7Where &8| &e📍 %planet%"
     # - label: "NEB"
-    #   template: "✨ %neb% NEB"
+    #   template: "&7NEB &8| &6✨ %neb%"
     # - label: "Server"
-    #   template: "👥 %players% online"
+    #   template: "&7Server &8| &b👥 %players% online"
+    # - label: "Cards"
+    #   template: "&7Cards &8| &d%cards% &8· &7%cards-time%"
 
 # Planet world border settings.
 # When a planet is created, a world border is set around the spawn point.
@@ -350,6 +478,12 @@ sidebar:
 # level instead (5 blocks when bought, growing up to 96 blocks).
 # Set to 0 to disable world borders.
 planet-world-border-radius: 15
+# What happens when a player crosses a planet's border — an ender pearl thrown
+# over it, a chorus fruit, a fall or a knockback:
+#   return — put them back on the spot they last stood on inside the border.
+#   random — drop them on a random safe spot inside the planet instead, so a
+#            pearl still takes them somewhere, just never outside.
+planet-border-breach-mode: return
 
 # ── Friends & Social ────────────────────────────────────────────────────────
 # Everything behind /friend and /friends. Friendships, requests, favourites,
@@ -777,5 +911,9 @@ resource-pack:
   enabled: false
   url: ""
   sha1: ""
+  # "required: true" refuses to let a player in without a working pack, and
+  # "prompt" is the line they are asked with when it is offered.
+  required: false
+  prompt: "Custom textures make the menus look right"
   required: false
   prompt: "Custom textures make the menus look right"

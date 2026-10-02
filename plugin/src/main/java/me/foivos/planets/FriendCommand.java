@@ -115,7 +115,7 @@ final class FriendCommand {
             }
             case "search", "find" -> {
                 if (args.length < 2) {
-                    system.promptSearch(player);
+                    system.openSearchDialog(player);
                     return true;
                 }
                 handleFriendsCommand(player, new String[]{"search", args[1]});
@@ -185,7 +185,7 @@ final class FriendCommand {
             }
             case "search", "find" -> {
                 if (args.length < 2) {
-                    system.promptSearch(player);
+                    system.openSearchDialog(player);
                 } else {
                     List<UUID> hits = system.search(player, args[1]);
                     if (hits.isEmpty()) {

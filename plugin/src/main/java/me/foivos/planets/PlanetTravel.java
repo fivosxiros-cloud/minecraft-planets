@@ -212,6 +212,13 @@ public final class PlanetTravel {
      * Players still in combat are refused outright.
      */
     public static void teleport(Player player, Planet planet) {
+        // In space the only way on is to fly. No menu, invite or quick launch may
+        // skip the trip across the sky - a ship that is already docking is the one
+        // exception, because that landing *is* the flight (- the pilot's own dock
+        // flags everyone aboard before it calls this).
+        if (spaceGuard(player)) {
+            return;
+        }
         if (isInCombat(player)) {
             player.sendMessage(Component.text("You can't teleport to a planet while in combat.").color(NamedTextColor.RED));
             return;
@@ -283,6 +290,41 @@ public final class PlanetTravel {
             playChargeEffect(player);
         }, 0L, EFFECT_INTERVAL_TICKS);
         CHARGE_EFFECTS.put(player.getUniqueId(), effect);
+    }
+
+    /**
+     * How long a requested trip waits before it lands, in ticks (0 when travel
+     * is instant). A ship's landing uses it to tell whether the planet actually
+     * took the pilot - and everyone riding with them - in.
+     */
+    public static long teleportDelayTicks() {
+        return Math.round(delaySeconds * 20.0);
+    }
+
+    /**
+     * Refuses a planet teleport for a player who is up in the space world (with a
+     * word about how to get out of it), leaving an in-flight landing alone.
+     */
+    private static boolean spaceGuard(Player player) {
+        if (!(plugin instanceof Planets planetsPlugin)) {
+            return false;
+        }
+        SpaceWorld space = planetsPlugin.spaceWorld();
+        if (space == null || !space.isSpaceWorld(player.getWorld())) {
+            return false;
+        }
+        ShipPilot pilots = planetsPlugin.shipPilot();
+        if (pilots != null && pilots.isLanding(player)) {
+            return false; // already on the way down to a pad
+        }
+        player.sendMessage(Component.text("\uD83D\uDE80 You're flying - ")
+                .color(NamedTextColor.RED)
+                .append(Component.text("fly into a planet's ring and sneak there to dock")
+                        .color(NamedTextColor.RED))
+                .append(Component.text(", or ").color(NamedTextColor.RED))
+                .append(Component.text("/ship leave").color(NamedTextColor.AQUA))
+                .append(Component.text(" to fly home.").color(NamedTextColor.RED)));
+        return true;
     }
 
     /** Whether the player has a delayed teleport waiting to fire. */
@@ -613,6 +655,42 @@ public final class PlanetTravel {
                     }
                     return spot;
                 }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A random safe spot inside a world's own border, for the border guard's
+     * {@code random} breach mode. It uses the same ground checks as a normal
+     * landing but deliberately skips the "far from the last landing" rule: a
+     * small planet has nowhere far to go.
+     *
+     * @return a safe spot, or null when none could be found
+     */
+    static Location randomSpotInsideBorder(World world) {
+        if (world == null) {
+            return null;
+        }
+        WorldBorder border = world.getWorldBorder();
+        double half = border.getSize() / 2.0;
+        if (half <= 2) {
+            return null; // no room to land inside
+        }
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        double centerX = border.getCenter().getX();
+        double centerZ = border.getCenter().getZ();
+        // Stay a couple of blocks clear of the wall itself.
+        double radius = Math.max(1.0, half - 2.0);
+        for (int attempt = 0; attempt < ATTEMPTS_PER_TIER * 3; attempt++) {
+            int x = (int) Math.round(centerX + (random.nextDouble() * 2 - 1) * radius);
+            int z = (int) Math.round(centerZ + (random.nextDouble() * 2 - 1) * radius);
+            world.getChunkAt(x >> 4, z >> 4); // make sure the terrain exists before inspecting it
+            for (int y = surfaceScanStart(world, x, z); y > world.getMinHeight(); y--) {
+                if (!isSafeGround(world, x, y, z)) {
+                    continue;
+                }
+                return new Location(world, x + 0.5, y + 1, z + 0.5, random.nextFloat() * 360f, 0f);
             }
         }
         return null;

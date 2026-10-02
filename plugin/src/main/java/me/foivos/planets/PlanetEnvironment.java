@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Handles the continuous "environment" traits of planets:
@@ -234,6 +235,27 @@ final class PlanetEnvironment implements Listener {
     Double atmosphereDamage(String worldName) {
         Atmosphere atmosphere = atmospheres.get(worldName.toLowerCase(Locale.ROOT));
         return atmosphere == null ? null : atmosphere.damagePerSecond();
+    }
+
+    /**
+     * A world's atmosphere in words ("4.0 damage/sec, any helmet protects"), or
+     * null when the world has none. The status view and the replies to the
+     * atmosphere command both read this, so a planet can never report one thing
+     * and do another.
+     */
+    String atmosphereDescription(String worldName) {
+        Atmosphere atmosphere = atmospheres.get(worldName.toLowerCase(Locale.ROOT));
+        if (atmosphere == null) {
+            return null;
+        }
+        if (atmosphere.helmets().isEmpty()) {
+            return atmosphere.damagePerSecond() + " damage/sec, any helmet protects";
+        }
+        String helmets = atmosphere.helmets().stream()
+                .map(material -> material.name().toLowerCase(Locale.ROOT))
+                .sorted()
+                .collect(Collectors.joining(", "));
+        return atmosphere.damagePerSecond() + " damage/sec, only these helmets protect: " + helmets;
     }
 
     /** The colors configured for a world, or null when it has no sky color. */

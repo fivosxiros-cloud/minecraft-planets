@@ -54,7 +54,8 @@ public final class MyPlanetMembersMenu implements InventoryHolder {
             player.closeInventory();
             new MyPlanetMenu(plugin, player, data).open(player);
         }
-        // Clicking a member skull cycles their role: MEMBER -> MODERATOR -> CO_OWNER -> MEMBER
+        // Clicking a member skull cycles their role: MEMBER -> MODERATOR -> CO_OWNER -> MEMBER.
+        // Shift-clicking opens their per-player permissions instead.
         if (slot >= 0 && slot < 35) {
             ItemStack item = inventory.getItem(slot);
             if (item == null || item.getType() != Material.PLAYER_HEAD) return;
@@ -66,6 +67,16 @@ public final class MyPlanetMembersMenu implements InventoryHolder {
             ItemMeta meta = item.getItemMeta();
             if (!(meta instanceof SkullMeta skullMeta) || skullMeta.getOwningPlayer() == null) return;
             UUID target = skullMeta.getOwningPlayer().getUniqueId();
+            if (event.isShiftClick()) {
+                if (!data.canManage(player.getUniqueId())) {
+                    player.sendMessage(Component.text("Only the owner or co-owner can change permissions.")
+                            .color(NamedTextColor.RED));
+                    return;
+                }
+                player.closeInventory();
+                new MyPlanetPermissionsMenu(plugin, player, data, target).open(player);
+                return;
+            }
             if (target.equals(data.ownerUuid())) {
                 player.sendMessage(Component.text("Can't change the owner's role.").color(NamedTextColor.RED));
                 return;
@@ -100,7 +111,7 @@ public final class MyPlanetMembersMenu implements InventoryHolder {
                 ).entrySet()) {
             for (UUID uuid : entry.getValue()) {
                 if (slot >= 35) break;
-                inventory.setItem(slot, memberHead(uuid, entry.getKey()));
+                inventory.setItem(slot, memberHead(data, uuid, entry.getKey()));
                 slot++;
             }
             if (slot >= 35) break;
@@ -112,7 +123,7 @@ public final class MyPlanetMembersMenu implements InventoryHolder {
         inventory.setItem(35, backItem());
     }
 
-    private static ItemStack memberHead(UUID uuid, MyPlanetData.Role role) {
+    private static ItemStack memberHead(MyPlanetData data, UUID uuid, MyPlanetData.Role role) {
         ItemStack item = new ItemStack(Material.PLAYER_HEAD);
         SkullMeta meta = (SkullMeta) item.getItemMeta();
         meta.setOwningPlayer(Bukkit.getOfflinePlayer(uuid));
@@ -125,11 +136,18 @@ public final class MyPlanetMembersMenu implements InventoryHolder {
             case MEMBER -> NamedTextColor.WHITE;
             case VISITOR -> NamedTextColor.GRAY;
         }).decoration(TextDecoration.ITALIC, false));
-        meta.lore(List.of(
-                Component.text("Role: " + role.name()).color(NamedTextColor.GRAY)
-                        .decoration(TextDecoration.ITALIC, false),
-                Component.text("Click to cycle role").color(NamedTextColor.YELLOW)
-                        .decoration(TextDecoration.ITALIC, false)));
+        java.util.List<Component> lore = new ArrayList<>();
+        lore.add(Component.text("Role: " + role.name()).color(NamedTextColor.GRAY)
+                .decoration(TextDecoration.ITALIC, false));
+        if (data.hasPermissionOverrides(uuid)) {
+            lore.add(Component.text("Some permissions set by hand").color(NamedTextColor.LIGHT_PURPLE)
+                    .decoration(TextDecoration.ITALIC, false));
+        }
+        lore.add(Component.text("Click to cycle role").color(NamedTextColor.YELLOW)
+                .decoration(TextDecoration.ITALIC, false));
+        lore.add(Component.text("Shift-click: permissions").color(NamedTextColor.AQUA)
+                .decoration(TextDecoration.ITALIC, false));
+        meta.lore(lore);
         item.setItemMeta(meta);
         return item;
     }

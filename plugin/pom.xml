@@ -16,7 +16,11 @@
         <dependency>
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
-            <version>[26.1.2.build,)</version>
+            <!-- Must match the build the server actually runs. An open range
+                 here resolved to the newest published paper-api (a 26.3 alpha),
+                 whose Adventure text API no longer matches the 26.1.2 server
+                 and crashed the sidebar with a NoSuchMethodError. -->
+            <version>26.1.2.build.57-stable</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -29,6 +33,18 @@
             <groupId>net.milkbowl.vault</groupId>
             <artifactId>VaultAPI</artifactId>
             <version>1.7</version>
+            <scope>provided</scope>
+        </dependency>
+        <!-- Multiverse-Core's own API, used instead of dispatching "/mv ..."
+             console commands: a mistyped or unsupported flag used to make world
+             creation fail silently, with the reason only ever printed to the
+             console. Provided, not shaded: the server supplies it at runtime, and
+             every call is guarded by MultiverseHook.isPresent() so a server
+             without Multiverse never links these classes. -->
+        <dependency>
+            <groupId>org.mvplugins.multiverse.core</groupId>
+            <artifactId>multiverse-core</artifactId>
+            <version>5.8.1</version>
             <scope>provided</scope>
         </dependency>
     </dependencies>

@@ -26,6 +26,81 @@ public final class MyPlanetData {
     /** The roles that grant meaningful build-level access. */
     private static final Set<Role> BUILD_ROLES = Set.of(Role.OWNER, Role.CO_OWNER, Role.MODERATOR, Role.MEMBER);
 
+    // ── Per-player permissions ──────────────────────────────────────────
+
+    /**
+     * The individual abilities an owner can hand out (or take away) for one
+     * member at a time, from {@code /myp → Members → (shift-click a member)}.
+     *
+     * <p>Two flavours live here side by side:
+     * <ul>
+     *   <li><b>Restrictions</b> — {@link #BUILD}, {@link #CONTAINERS},
+     *       {@link #DOORS}, {@link #ITEM_DROPS}: a member may do these while the
+     *       planet-wide toggle allows it, and denying one takes it away from
+     *       that member alone.</li>
+     *   <li><b>Hand-outs</b> — {@link #INVITE}, {@link #KICK_VISITORS},
+     *       {@link #PVP}, {@link #EXPLOSIONS}: they follow the member's role and
+     *       are otherwise off, so an owner can grant them one player at a
+     *       time.</li>
+     * </ul>
+     *
+     * <p>Each one has a sensible default for every role, and an owner's edit is
+     * stored as an <em>override</em> on top of that default — so promoting or
+     * demoting a member keeps working, and putting a member back to "Default"
+     * simply drops the override.
+     */
+    public enum Permission {
+        BUILD("Build", Material.IRON_PICKAXE, "Break and place blocks"),
+        CONTAINERS("Containers", Material.CHEST, "Open chests, barrels and shulker boxes"),
+        DOORS("Doors & Buttons", Material.OAK_DOOR, "Use doors, gates, trapdoors and buttons"),
+        ITEM_DROPS("Item Drops", Material.SLIME_BALL, "Drop and pick items up"),
+        INVITE("Invite Players", Material.WRITABLE_BOOK, "Send invitations to the planet"),
+        KICK_VISITORS("Kick Visitors", Material.LEAD, "Remove visitors from the planet"),
+        PVP("PvP Duels", Material.IRON_SWORD,
+                "Fight members even while the planet's PvP is off"),
+        EXPLOSIONS("Explosions", Material.TNT,
+                "Let this member's TNT damage blocks while Explosions are off");
+
+        private final String displayName;
+        private final Material icon;
+        private final String description;
+
+        Permission(String displayName, Material icon, String description) {
+            this.displayName = displayName;
+            this.icon = icon;
+            this.description = description;
+        }
+
+        public String displayName() { return displayName; }
+        public Material icon() { return icon; }
+        public String description() { return description; }
+
+        /**
+         * Whether this is a hand-out (off unless the owner allows it) rather
+         * than a restriction (on unless the owner denies it).
+         */
+        public boolean handOut() {
+            return this == INVITE || this == KICK_VISITORS
+                    || this == PVP || this == EXPLOSIONS;
+        }
+
+        /**
+         * What this permission reads as when the player has no explicit
+         * override: members keep the build-level abilities, inviting and
+         * kicking follow the role, and the two opt-in grants stay off.
+         */
+        public boolean defaultFor(Role role) {
+            if (role == null || role == Role.VISITOR) {
+                return false;
+            }
+            return switch (this) {
+                case INVITE, KICK_VISITORS -> role.atLeast(Role.MODERATOR);
+                case PVP, EXPLOSIONS -> false;
+                default -> true;
+            };
+        }
+    }
+
     // ── Planet status ───────────────────────────────────────────────────
 
     public enum Status {
@@ -73,6 +148,13 @@ public final class MyPlanetData {
     /** Pending invitations: inviter UUID -> set of invited UUIDs. */
     private final Map<UUID, Set<UUID>> invitations = new HashMap<>();
 
+    /**
+     * Players who asked to visit this planet from the star chart, with the time
+     * they asked. The owner approves (which sends them the usual invitation) or
+     * turns them away from {@code /myp → Visit Requests}.
+     */
+    private final Map<UUID, Long> visitRequests = new HashMap<>();
+
     // Planet properties
     private String description = "";
     private boolean publicAccess = true;
@@ -97,6 +179,12 @@ public final class MyPlanetData {
 
     // Block placement tracking per player (UUID -> blocks placed count)
     private final Map<UUID, Integer> blockCounts = new HashMap<>();
+
+    /**
+     * Per-member permission overrides: player UUID -> permission -> granted.
+     * A permission missing from the inner map follows the role's default.
+     */
+    private final Map<UUID, Map<Permission, Boolean>> permissionOverrides = new HashMap<>();
 
     /** Transient: whether the one-time "block limit reached" chat warning was already sent. */
     private boolean blockLimitWarned = false;
@@ -406,6 +494,56 @@ public final class MyPlanetData {
         touch();
     }
 
+    // ── Visit requests ──────────────────────────────────────────────────
+
+    /** What {@link #requestVisit} did, so the caller can explain a refusal. */
+    public enum VisitRequestResult {
+        OK, ALREADY_MEMBER, ALREADY_INVITED, ALREADY_REQUESTED
+    }
+
+    /**
+     * Records a request to visit. Members and players who already have an
+     * invitation waiting don't need to ask, and asking twice changes nothing.
+     */
+    public VisitRequestResult requestVisit(UUID player) {
+        if (player == null) {
+            return VisitRequestResult.ALREADY_REQUESTED;
+        }
+        if (isMember(player)) {
+            return VisitRequestResult.ALREADY_MEMBER;
+        }
+        if (isInvited(player)) {
+            return VisitRequestResult.ALREADY_INVITED;
+        }
+        if (visitRequests.putIfAbsent(player, System.currentTimeMillis()) != null) {
+            return VisitRequestResult.ALREADY_REQUESTED;
+        }
+        touch();
+        return VisitRequestResult.OK;
+    }
+
+    /** Whether this player is waiting for an answer. */
+    public boolean hasVisitRequest(UUID player) {
+        return player != null && visitRequests.containsKey(player);
+    }
+
+    /** Drops a request: answered either way, or the player gave up on it. */
+    public void clearVisitRequest(UUID player) {
+        if (player != null && visitRequests.remove(player) != null) {
+            touch();
+        }
+    }
+
+    /** Everyone waiting for an answer: player UUID -> when they asked. */
+    public Map<UUID, Long> visitRequests() {
+        return Collections.unmodifiableMap(visitRequests);
+    }
+
+    /** How many players are waiting to be let in. */
+    public int visitRequestCount() {
+        return visitRequests.size();
+    }
+
     public Map<UUID, Set<UUID>> invitations() {
         return Collections.unmodifiableMap(invitations);
     }
@@ -570,6 +708,58 @@ public final class MyPlanetData {
         return role != null && role.atLeast(Role.MODERATOR);
     }
 
+    /**
+     * Whether this player currently holds one of the per-player permissions:
+     * an explicit owner-set override when there is one, and the role's default
+     * otherwise.
+     */
+    public boolean permission(UUID uuid, Permission permission) {
+        Boolean override = permissionOverride(uuid, permission);
+        return override != null ? override : permission.defaultFor(roleOf(uuid));
+    }
+
+    /** The owner-set override for a player and permission, or null for "default". */
+    public Boolean permissionOverride(UUID uuid, Permission permission) {
+        Map<Permission, Boolean> overrides = permissionOverrides.get(uuid);
+        return overrides == null ? null : overrides.get(permission);
+    }
+
+    /** Whether this player has any permission the owner set by hand. */
+    public boolean hasPermissionOverrides(UUID uuid) {
+        Map<Permission, Boolean> overrides = permissionOverrides.get(uuid);
+        return overrides != null && !overrides.isEmpty();
+    }
+
+    /**
+     * Sets (or clears, with a null value) one per-player permission override.
+     * The owner always keeps every permission, so their overrides are ignored.
+     */
+    public void permission(UUID uuid, Permission permission, Boolean granted) {
+        if (uuid.equals(ownerUuid)) {
+            permissionOverrides.remove(uuid);
+            touch();
+            return;
+        }
+        Map<Permission, Boolean> overrides =
+                permissionOverrides.computeIfAbsent(uuid, k -> new EnumMap<>(Permission.class));
+        if (granted == null) {
+            overrides.remove(permission);
+            if (overrides.isEmpty()) {
+                permissionOverrides.remove(uuid);
+            }
+        } else {
+            overrides.put(permission, granted);
+        }
+        touch();
+    }
+
+    /** Drops every hand-set permission for a player, back to their role's defaults. */
+    public void clearPermissionOverrides(UUID uuid) {
+        if (permissionOverrides.remove(uuid) != null) {
+            touch();
+        }
+    }
+
     // ── Serialization ───────────────────────────────────────────────────
 
     /**
@@ -620,6 +810,12 @@ public final class MyPlanetData {
         }
         section.set("invitations", inviteList);
 
+        // Visit requests from the star chart
+        org.bukkit.configuration.ConfigurationSection requestSection = section.createSection("visit-requests");
+        for (Map.Entry<UUID, Long> entry : visitRequests.entrySet()) {
+            requestSection.set(entry.getKey().toString(), entry.getValue());
+        }
+
         // Upgrades
         for (Upgrade u : Upgrade.values()) {
             section.set("upgrades." + u.name(), upgrades.getOrDefault(u, 0));
@@ -629,6 +825,14 @@ public final class MyPlanetData {
         org.bukkit.configuration.ConfigurationSection bcSection = section.createSection("block-counts");
         for (Map.Entry<UUID, Integer> entry : blockCounts.entrySet()) {
             bcSection.set(entry.getKey().toString(), entry.getValue());
+        }
+
+        // Per-player permission overrides
+        org.bukkit.configuration.ConfigurationSection permSection = section.createSection("permissions");
+        for (Map.Entry<UUID, Map<Permission, Boolean>> entry : permissionOverrides.entrySet()) {
+            for (Map.Entry<Permission, Boolean> override : entry.getValue().entrySet()) {
+                permSection.set(entry.getKey() + "." + override.getKey().name(), override.getValue());
+            }
         }
     }
 
@@ -681,6 +885,17 @@ public final class MyPlanetData {
         }
 
         // Invitations
+        // Visit requests
+        org.bukkit.configuration.ConfigurationSection requestSection = section.getConfigurationSection("visit-requests");
+        if (requestSection != null) {
+            for (String key : requestSection.getKeys(false)) {
+                try {
+                    data.visitRequests.put(UUID.fromString(key), requestSection.getLong(key));
+                } catch (IllegalArgumentException ignored) {
+                }
+            }
+        }
+
         List<String> inviteList = section.getStringList("invitations");
         for (String entry : inviteList) {
             String[] parts = entry.split(":", 2);
@@ -719,6 +934,34 @@ public final class MyPlanetData {
                     UUID uuid = UUID.fromString(key);
                     data.blockCounts.put(uuid, bcSection.getInt(key, 0));
                 } catch (IllegalArgumentException ignored) {}
+            }
+        }
+
+        // Per-player permission overrides
+        org.bukkit.configuration.ConfigurationSection permSection = section.getConfigurationSection("permissions");
+        if (permSection != null) {
+            for (String key : permSection.getKeys(false)) {
+                UUID uuid;
+                try {
+                    uuid = UUID.fromString(key);
+                } catch (IllegalArgumentException ignored) {
+                    continue;
+                }
+                org.bukkit.configuration.ConfigurationSection playerSection =
+                        permSection.getConfigurationSection(key);
+                if (playerSection == null) {
+                    continue;
+                }
+                Map<Permission, Boolean> overrides = new EnumMap<>(Permission.class);
+                for (String permissionKey : playerSection.getKeys(false)) {
+                    try {
+                        overrides.put(Permission.valueOf(permissionKey.toUpperCase(Locale.ROOT)),
+                                playerSection.getBoolean(permissionKey));
+                    } catch (IllegalArgumentException ignored) {}
+                }
+                if (!overrides.isEmpty()) {
+                    data.permissionOverrides.put(uuid, overrides);
+                }
             }
         }
 

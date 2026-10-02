@@ -1,11 +1,20 @@
 package me.foivos.planets;
 
+import io.papermc.paper.dialog.Dialog;
+import io.papermc.paper.registry.data.dialog.ActionButton;
+import io.papermc.paper.registry.data.dialog.DialogBase;
+import io.papermc.paper.registry.data.dialog.action.DialogAction;
+import io.papermc.paper.registry.data.dialog.body.DialogBody;
+import io.papermc.paper.registry.data.dialog.input.DialogInput;
+import io.papermc.paper.registry.data.dialog.type.DialogType;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashSet;
@@ -50,7 +59,7 @@ final class FriendSystem {
     }
 
     /** A question waiting for the player's next chat message. */
-    enum PromptKind { SEARCH, MESSAGE, GIFT_AMOUNT }
+    enum PromptKind { MESSAGE, GIFT_AMOUNT }
 
     private record Prompt(PromptKind kind, UUID target) {
     }
@@ -233,12 +242,89 @@ final class FriendSystem {
         prompts.remove(uuid);
     }
 
-    /** Starts a search: the player's next chat line is the query. */
-    void promptSearch(Player player) {
-        prompts.put(player.getUniqueId(), new Prompt(PromptKind.SEARCH, null));
+    /**
+     * Starts a search through the vanilla dialog screen (Paper's dialog API):
+     * a proper popup with a text box and Search / Cancel buttons, instead of
+     * the type-it-in-chat prompt. The answer arrives through the dialog's own
+     * click callback — nothing is put in chat, so the chat prompt machinery is
+     * not involved at all.
+     *
+     * <p>The dialog is built each time it is opened; its callback lives long
+     * enough for one submit and expires on its own.
+     */
+    void openSearchDialog(Player player) {
+        DialogInput nameBox = DialogInput.text("name", Component.text("Player name")
+                        .color(NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false))
+                .width(300)
+                .labelVisible(false)
+                .maxLength(16)
+                .build();
+        ActionButton search = ActionButton.builder(Component.text("Search")
+                        .color(NamedTextColor.AQUA).decoration(TextDecoration.ITALIC, false))
+                .width(150)
+                .action(DialogAction.customClick((response, audience) -> {
+                    String query = response.getText("name");
+                    Runnable run = () -> useSearchQuery(player, query);
+                    if (Bukkit.isPrimaryThread()) {
+                        run.run();
+                    } else {
+                        // Dialog clicks arrive off the main thread; the menus
+                        // and the search may only be touched on it.
+                        Bukkit.getScheduler().runTask(plugin, run);
+                    }
+                }, ClickCallback.Options.builder().uses(1).lifetime(Duration.ofMinutes(10)).build()))
+                .build();
+        // Cancel puts the player back where they were: the dialog is opened from
+        // the friends menu, so closing it should not leave them with no menu at
+        // all. (Escape still just closes, which is what the client expects.)
+        ActionButton cancel = ActionButton.builder(Component.text("Cancel")
+                        .color(NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false))
+                .width(100)
+                .action(DialogAction.customClick((response, audience) ->
+                                returnToFriends(player),
+                        ClickCallback.Options.builder().uses(1).lifetime(Duration.ofMinutes(10)).build()))
+                .build();
+        Dialog dialog = Dialog.create(builder -> builder.empty()
+                .base(DialogBase.builder(Component.text("\uD83D\uDD0D Find a friend")
+                                .color(NamedTextColor.AQUA).decoration(TextDecoration.ITALIC, false))
+                        .canCloseWithEscape(true)
+                        .pause(false)
+                        .afterAction(DialogBase.DialogAfterAction.CLOSE)
+                        .body(List.of(DialogBody.plainMessage(Component.text(
+                                        "Type a player's name to search everyone the server knows.",
+                                        NamedTextColor.GRAY)
+                                .decoration(TextDecoration.ITALIC, false))))
+                        .inputs(List.of(nameBox))
+                        .build())
+                .type(DialogType.multiAction(List.of(search), cancel, 1)));
         player.closeInventory();
-        player.sendMessage(hint("Type a name to search for",
-                "or \"cancel\" to stop."));
+        player.showDialog(dialog);
+    }
+
+    /**
+     * Reopens the friends menu after the search dialog goes away. The dialog's
+     * close is sent after the click is answered, so the menu is opened on the
+     * next tick rather than under it.
+     */
+    private void returnToFriends(Player player) {
+        Bukkit.getScheduler().runTask(plugin, () -> {
+            if (player.isOnline()) {
+                openFriends(player);
+            }
+        });
+    }
+
+    /** Acts on what the search dialog was submitted with. */
+    private void useSearchQuery(Player player, String query) {
+        String text = query == null ? "" : query.trim();
+        if (text.isEmpty()) {
+            // An empty box means the same as cancelling: back to the menu.
+            player.sendMessage(hint("Type a name to search for",
+                    "or press Cancel to go back."));
+            returnToFriends(player);
+            return;
+        }
+        openSearch(player, text);
     }
 
     /** Starts a private message to a friend. */
@@ -276,7 +362,6 @@ final class FriendSystem {
             return true;
         }
         switch (prompt.kind()) {
-            case SEARCH -> openSearch(player, text);
             case MESSAGE -> messageFriend(player, prompt.target(), text);
             case GIFT_AMOUNT -> gift(player, prompt.target(), text);
         }
@@ -292,6 +377,27 @@ final class FriendSystem {
             return;
         }
         new FriendsMenu(plugin, player, this, hits, "Search: " + query).open(player);
+    }
+
+    /**
+     * The teleport button on a friend's profile: the same request /tpa or
+     * /tpahere sends, without anybody having to type a name. It goes through
+     * the plugin's own request flow, so the friend answers it with /tpaccept or
+     * /tpdeny exactly as they would a typed one, and a friend who switched
+     * teleport requests off cannot be asked at all.
+     *
+     * @param here true to ask them to come to you (/tpahere), false to ask to
+     *             travel to them (/tpa)
+     */
+    boolean requestTeleport(Player viewer, UUID target, boolean here) {
+        String name = friends.nameOf(target);
+        Player online = target == null ? null : Bukkit.getPlayer(target);
+        if (online == null) {
+            viewer.sendMessage(Component.text("\uD83E\uDDED " + name + " is offline — requests need them online.")
+                    .color(NamedTextColor.RED));
+            return false;
+        }
+        return plugin.sendTeleportRequest(viewer, online, here);
     }
 
     // ── Social actions ──────────────────────────────────────────────────

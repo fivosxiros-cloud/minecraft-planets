@@ -39,6 +39,48 @@ public final class PlayerSettings {
     public enum Category { GENERAL, FRIENDS }
 
     /**
+     * The boat a player's ship is: an ordinary boat, or the chest boat, which
+     * carries a storage chest on its deck. Picked in {@code /settings}, and the
+     * ship changes over right away - even while it is flying.
+     */
+    public enum BoatType {
+        NORMAL("Boat", Material.OAK_BOAT, "a plain boat"),
+        CHEST("Chest Boat", Material.OAK_CHEST_BOAT, "a boat with a chest on the deck");
+
+        private final String displayName;
+        private final Material icon;
+        private final String description;
+
+        BoatType(String displayName, Material icon, String description) {
+            this.displayName = displayName;
+            this.icon = icon;
+            this.description = description;
+        }
+
+        public String displayName() { return displayName; }
+        public Material icon() { return icon; }
+        public String description() { return description; }
+
+        /** The other boat, so a click always changes something. */
+        public BoatType next() {
+            return this == NORMAL ? CHEST : NORMAL;
+        }
+
+        /** Parses a stored boat name, or null when it isn't one. */
+        public static BoatType byName(String name) {
+            if (name == null) {
+                return null;
+            }
+            for (BoatType type : values()) {
+                if (type.name().equalsIgnoreCase(name.trim())) {
+                    return type;
+                }
+            }
+            return null;
+        }
+    }
+
+    /**
      * The toggles shown in the /settings menu. Each one carries the short
      * "what it affects" line shown in its menu description, plus what the world
      * looks like with it on and off.
@@ -107,6 +149,11 @@ public final class PlayerSettings {
                 "The haze and ambient particles drifting around you",
                 "Planet haze and ambient particles drift around you",
                 "The haze and ambient particles around you are hidden"),
+        // ── Space ─────────────────────────────────────────────────────
+        SHIP_BANNER("Boat Banner", Material.WHITE_BANNER,
+                "A banner flying at the back of your ship",
+                "Your boat flies a banner at the stern",
+                "Your boat's stern stays plain"),
         // ── Comfort ─────────────────────────────────────────────────────
         MUSIC("Planet Music", Material.JUKEBOX,
                 "Music that plays while you're on a planet or in a lobby",
@@ -263,11 +310,28 @@ public final class PlayerSettings {
     /** uuid -> the Planet HUD line that player picked, when it isn't the default. */
     private final Map<UUID, Integer> hudModes = new ConcurrentHashMap<>();
 
+    /** uuid -> the boat that player's ship is drawn as, when it isn't the default. */
+    private final Map<UUID, BoatType> boatTypes = new ConcurrentHashMap<>();
+
     /**
      * uuid -> the sidebar lines that player picked, in the order they want them.
      * A player with no entry follows {@code sidebar.lines} from config.yml.
      */
     private final Map<UUID, List<String>> sidebarLines = new ConcurrentHashMap<>();
+
+    /**
+     * uuid -> line id -> colour name, for the sidebar lines that player has
+     * recoloured. A line with no entry keeps the colours its template asks for.
+     */
+    private final Map<UUID, Map<String, String>> sidebarColours = new ConcurrentHashMap<>();
+
+    /**
+     * uuid -> {@code "Plugin.page.toggle"} -> value, for the {@code /settings}
+     * pages other plugins register through {@link ExternalSettings}. They live
+     * in this file so one player has one place their choices are written, and so
+     * "Reset to Defaults" means the same thing on every page of the menu.
+     */
+    private final Map<UUID, Map<String, Boolean>> externalSettings = new ConcurrentHashMap<>();
 
     public PlayerSettings(Planets plugin) {
         this.plugin = plugin;
@@ -280,7 +344,10 @@ public final class PlayerSettings {
     public void load() {
         values.clear();
         hudModes.clear();
+        boatTypes.clear();
         sidebarLines.clear();
+        sidebarColours.clear();
+        externalSettings.clear();
         if (!file.exists()) {
             config = new YamlConfiguration();
             return;
@@ -324,11 +391,57 @@ public final class PlayerSettings {
                     }
                 }
             }
+            String boatPath = "players." + key + ".ship-boat";
+            if (config.contains(boatPath)) {
+                BoatType type = BoatType.byName(config.getString(boatPath));
+                if (type != null && type != BoatType.NORMAL) {
+                    boatTypes.put(uuid, type);
+                }
+            }
             // An empty list is a real answer here ("none of the lines"), so the
             // key's presence is what decides, not whether it holds anything.
             String sidebarPath = "players." + key + ".sidebar-lines";
             if (config.contains(sidebarPath)) {
                 sidebarLines.put(uuid, new ArrayList<>(config.getStringList(sidebarPath)));
+            }
+            // Colours are stored per line id: sidebar-colours.balance: gold.
+            ConfigurationSection colours = config.getConfigurationSection(
+                    "players." + key + ".sidebar-colours");
+            if (colours != null) {
+                Map<String, String> chosen = new ConcurrentHashMap<>();
+                for (String lineId : colours.getKeys(false)) {
+                    String name = colours.getString(lineId);
+                    if (name != null && !name.isBlank()) {
+                        chosen.put(lineId, name);
+                    }
+                }
+                if (!chosen.isEmpty()) {
+                    sidebarColours.put(uuid, chosen);
+                }
+            }
+            ConfigurationSection external = config.getConfigurationSection(
+                    "players." + key + ".external");
+            if (external != null) {
+                Map<String, Boolean> choices = new ConcurrentHashMap<>();
+                for (String pluginName : external.getKeys(false)) {
+                    ConfigurationSection pages = external.getConfigurationSection(pluginName);
+                    if (pages == null) {
+                        continue;
+                    }
+                    for (String pageId : pages.getKeys(false)) {
+                        ConfigurationSection page = pages.getConfigurationSection(pageId);
+                        if (page == null) {
+                            continue;
+                        }
+                        for (String toggle : page.getKeys(false)) {
+                            choices.put(pluginName + "." + pageId + "." + toggle,
+                                    page.getBoolean(toggle));
+                        }
+                    }
+                }
+                if (!choices.isEmpty()) {
+                    externalSettings.put(uuid, choices);
+                }
             }
         }
         plugin.getLogger().info("Loaded personal settings for " + values.size() + " player(s).");
@@ -347,8 +460,24 @@ public final class PlayerSettings {
         for (Map.Entry<UUID, Integer> entry : hudModes.entrySet()) {
             config.set("players." + entry.getKey() + ".hud-mode", entry.getValue());
         }
+        for (Map.Entry<UUID, BoatType> entry : boatTypes.entrySet()) {
+            config.set("players." + entry.getKey() + ".ship-boat",
+                    entry.getValue().name().toLowerCase(Locale.ROOT));
+        }
         for (Map.Entry<UUID, List<String>> entry : sidebarLines.entrySet()) {
             config.set("players." + entry.getKey() + ".sidebar-lines", entry.getValue());
+        }
+        for (Map.Entry<UUID, Map<String, String>> entry : sidebarColours.entrySet()) {
+            for (Map.Entry<String, String> colour : entry.getValue().entrySet()) {
+                config.set("players." + entry.getKey() + ".sidebar-colours." + colour.getKey(),
+                        colour.getValue());
+            }
+        }
+        for (Map.Entry<UUID, Map<String, Boolean>> entry : externalSettings.entrySet()) {
+            for (Map.Entry<String, Boolean> choice : entry.getValue().entrySet()) {
+                config.set("players." + entry.getKey() + ".external." + choice.getKey(),
+                        choice.getValue());
+            }
         }
         try {
             config.save(file);
@@ -418,6 +547,35 @@ public final class PlayerSettings {
         this.defaultHudMode = Math.max(0, index);
     }
 
+    // ── The boat the ship is drawn as ───────────────────────────────────
+
+    /** The boat this player's ship is drawn as (an ordinary boat by default). */
+    public BoatType boatType(UUID uuid) {
+        return boatTypes.getOrDefault(uuid, BoatType.NORMAL);
+    }
+
+    /** Picks the boat this player's ship is drawn as and persists it. */
+    public void setBoatType(UUID uuid, BoatType type) {
+        if (uuid == null) {
+            return;
+        }
+        if (type == null || type == BoatType.NORMAL) {
+            if (boatTypes.remove(uuid) == null) {
+                return; // already the default
+            }
+        } else {
+            boatTypes.put(uuid, type);
+        }
+        save();
+    }
+
+    /** Switches to the other boat and returns the new choice. */
+    public BoatType cycleBoatType(UUID uuid) {
+        BoatType next = boatType(uuid).next();
+        setBoatType(uuid, next);
+        return next;
+    }
+
     // ── Sidebar lines ───────────────────────────────────────────────────
 
     /**
@@ -445,17 +603,127 @@ public final class PlayerSettings {
         save();
     }
 
+    // ── Sidebar line colours ────────────────────────────────────────────
+
+    /**
+     * The colour a player picked for one sidebar line, or {@code null} when the
+     * line still draws in the colours its template (config.yml) asks for. The
+     * name is a vanilla colour like {@code gold}, the same spelling config.yml
+     * uses for {@code sidebar.title-color}.
+     */
+    public String sidebarColour(UUID uuid, String lineId) {
+        if (uuid == null || lineId == null) {
+            return null;
+        }
+        Map<String, String> chosen = sidebarColours.get(uuid);
+        return chosen == null ? null : chosen.get(lineId);
+    }
+
+    /** Remembered every colour a player has picked, keyed by line id. */
+    public Map<String, String> sidebarColours(UUID uuid) {
+        Map<String, String> chosen = sidebarColours.get(uuid);
+        return chosen == null ? Map.of() : Map.copyOf(chosen);
+    }
+
+    /**
+     * Recolours one sidebar line for a player and writes it out at once, so the
+     * choice survives a restart without anyone having to save anything. Passing
+     * {@code null} hands the line back to the colours config.yml gives it.
+     */
+    public void setSidebarColour(UUID uuid, String lineId, String colour) {
+        if (uuid == null || lineId == null || lineId.isBlank()) {
+            return;
+        }
+        if (colour == null || colour.isBlank()) {
+            Map<String, String> chosen = sidebarColours.get(uuid);
+            if (chosen == null || chosen.remove(lineId) == null) {
+                return;
+            }
+            if (chosen.isEmpty()) {
+                sidebarColours.remove(uuid);
+            }
+            save();
+            return;
+        }
+        sidebarColours.computeIfAbsent(uuid, k -> new ConcurrentHashMap<>())
+                .put(lineId, colour.trim().toLowerCase(Locale.ROOT));
+        save();
+    }
+
+    /** Hands every recoloured line back to the colours config.yml gives it. */
+    public void clearSidebarColours(UUID uuid) {
+        if (sidebarColours.remove(uuid) != null) {
+            save();
+        }
+    }
+
+    // ── Pages other plugins add ─────────────────────────────────────────
+
+    /**
+     * One switch on a page another plugin registered, as this player set it.
+     *
+     * @param path     the {@code "Plugin.page"} the switch lives on
+     * @param key      the switch's own id
+     * @param fallback what the switch's owner says it defaults to
+     */
+    public boolean external(UUID uuid, String path, String key, boolean fallback) {
+        if (uuid == null) {
+            return fallback;
+        }
+        Map<String, Boolean> choices = externalSettings.get(uuid);
+        if (choices == null) {
+            return fallback;
+        }
+        Boolean stored = choices.get(path + "." + key);
+        return stored == null ? fallback : stored;
+    }
+
+    /** Stores one switch's value, or forgets it when {@code value} is null. */
+    public void setExternal(UUID uuid, String path, String key, Boolean value) {
+        if (uuid == null) {
+            return;
+        }
+        if (value == null) {
+            Map<String, Boolean> choices = externalSettings.get(uuid);
+            if (choices == null || choices.remove(path + "." + key) == null) {
+                return;
+            }
+            if (choices.isEmpty()) {
+                externalSettings.remove(uuid);
+            }
+            save();
+            return;
+        }
+        externalSettings.computeIfAbsent(uuid, k -> new ConcurrentHashMap<>())
+                .put(path + "." + key, value);
+        save();
+    }
+
+    /** Every switch this player has set on a page of another plugin. */
+    public Map<String, Boolean> externalSettings(UUID uuid) {
+        Map<String, Boolean> choices = externalSettings.get(uuid);
+        return choices == null ? Map.of() : Map.copyOf(choices);
+    }
+
     /** Whether the player changed anything from the defaults. */
     public boolean anyCustom(UUID uuid) {
-        return values.containsKey(uuid) || hudModes.containsKey(uuid) || sidebarLines.containsKey(uuid);
+        return values.containsKey(uuid) || hudModes.containsKey(uuid)
+                || boatTypes.containsKey(uuid)
+                || sidebarLines.containsKey(uuid) || sidebarColours.containsKey(uuid)
+                || externalSettings.containsKey(uuid);
     }
 
     /** How many of a player's settings differ from the default. */
     public int customCount(UUID uuid) {
         int count = hudModes.containsKey(uuid) ? 1 : 0;
+        if (boatTypes.containsKey(uuid)) {
+            count++;
+        }
         if (sidebarLines.containsKey(uuid)) {
             count++;
         }
+        count += sidebarColours(uuid).size();
+        count += externalSettings(uuid).size();
         EnumMap<Setting, Boolean> map = values.get(uuid);
         if (map == null) {
             return count;
@@ -472,7 +740,10 @@ public final class PlayerSettings {
     public void reset(UUID uuid) {
         values.remove(uuid);
         hudModes.remove(uuid);
+        boatTypes.remove(uuid);
         sidebarLines.remove(uuid);
+        sidebarColours.remove(uuid);
+        externalSettings.remove(uuid);
         save();
     }
 

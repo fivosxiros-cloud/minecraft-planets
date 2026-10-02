@@ -11,7 +11,10 @@
 
     <name>planets</name>
     <modules>
+        <!-- The planets plugin builds first: the bounty board compiles against
+             the /settings API it publishes. -->
         <module>plugin</module>
+        <module>bounty</module>
     </modules>
 
     <properties>
@@ -49,6 +52,14 @@
         <repository>
             <id>codemc</id>
             <url>https://repo.codemc.org/repository/maven-public/</url>
+        </repository>
+        <!-- Multiverse-Core's own repository. The id matters, not just the URL:
+             the jar already in the local repository is recorded as coming from
+             "onarandombox", and Maven refuses to use a cached artifact whose
+             repository isn't declared (offline builds fail without this). -->
+        <repository>
+            <id>onarandombox</id>
+            <url>https://repo.onarandombox.com/content/groups/public/</url>
         </repository>
     </repositories>
 

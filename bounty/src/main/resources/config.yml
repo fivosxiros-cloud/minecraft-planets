@@ -1,0 +1,210 @@
+# ── Bounties ───────────────────────────────────────────────────────────────
+# Money on someone's head: anyone can add to a player's bounty, and whoever
+# kills that player takes the lot. Bounties are stored in a SQLite database in
+# this plugin's folder, so they survive restarts, crashes and reconnects.
+#
+# Messages are all below, under "messages": they take & colour codes and the
+# %placeholders% listed beside each one.
+
+settings:
+  # The smallest and largest amount one /bounty add may place. Players with
+  # bounty.admin skip both.
+  minimum-bounty: 100
+  maximum-bounty: 1000000
+  # Who may be targeted: "all" (default), "online" (only players on the server
+  # right now), or "played" (only names the server has seen before).
+  targets: all
+  # A bounty may be placed on the player placing it — killing them still pays
+  # the killer, and their own share comes back (see self-bounty below).
+  allow-self-bounty: true
+
+# Money a player puts on their own head comes back when that bounty is claimed,
+# so self-bounties are bait rather than a way to lose your money.
+self-bounty:
+  enabled: true
+  # How much of their own contribution goes back to them, 0-100.
+  refund-percent: 100
+
+notifications:
+  # These three are the switches a player changes for themselves in /settings
+  # (Planets adds this page to its own settings menu). The values here are only
+  # the starting point, used for a player who never touched them — and the only
+  # behaviour if the Planets plugin is not installed.
+  personal:
+    # Someone added money to my bounty.
+    bounty-added: true
+    # Someone claimed my bounty by killing me.
+    bounty-claimed: true
+    # I claimed somebody else's bounty.
+    bounty-received: true
+  # Server-wide announcements.
+  broadcast:
+    bounty-added: false
+    bounty-claimed: true
+
+gui:
+  title: "&b&lBounties"
+  # The frame, and the filler in the empty slots of the board.
+  frame-material: LIGHT_BLUE_STAINED_GLASS_PANE
+  # How many bounty heads one page shows. The board is built for 21 (three rows
+  # of seven); lowering it just means more pages.
+  entries-per-page: 21
+  # Your own head always sits here, and is not sorted or paged with the rest.
+  self-slot: 13
+  # The board's controls.
+  sorting-slot: 49
+  previous-slot: 47
+  next-slot: 51
+  page-slot: 48
+  close-slot: 53
+  # Right-clicking "Add Bounty" places this much without any typing.
+  quick-add-amount: 1000
+
+anti-abuse:
+  enabled: true
+  # Seconds before the same killer can claim a bounty from the same victim
+  # again. 0 disables the wait.
+  kill-cooldown: 60
+  # With this on, a repeat kill inside the cooldown pays nothing and leaves the
+  # bounty standing, so friends cannot farm each other's bounties.
+  prevent-repeated-kills: true
+
+storage:
+  # SQLite database file, inside the plugin's folder.
+  file: bounties.db
+  # How often changed bounties are written out, in seconds. Everything is also
+  # written on the last change before the server stops.
+  save-interval-seconds: 5
+
+economy:
+  # Prefix for every amount shown to players.
+  currency-symbol: "$"
+  # Write 10000 as $10,000.
+  thousands-separator: true
+
+# ── Messages ───────────────────────────────────────────────────────────────
+messages:
+  prefix: "&b&lBounties &8» &r"
+  no-permission: "&cYou don't have permission to do that."
+  economy-missing: "&cThe server economy is unavailable, so bounties are closed."
+  usage: "&7Usage: &f/bounty add <player> <amount> &7· &f/bounty check <player> &7· &f/bounty list &7· &f/bounties"
+  player-not-found: "&cThere is nobody called &f%player%&c here, and no bounty of theirs either."
+  target-must-be-online: "&c%player%&c is not online right now."
+  target-unknown: "&cThis server has never seen a player called &f%player%&c."
+  self-not-allowed: "&cBounties on yourself are switched off here."
+  amount-invalid: "&f%input%&c is not an amount of money."
+  amount-minimum: "&cThe smallest bounty is &f%minimum%&c."
+  amount-maximum: "&cThe largest bounty is &f%maximum%&c."
+  not-enough-money: "&cYou do not have enough money to place this bounty. You have &f%balance%&c."
+  place-failed: "&cThe economy refused the payment, so nothing was placed."
+  # %player% has the bounty, %amount% is what was just placed, %total% is their
+  # new total, %actor% is whoever placed it.
+  bounty-added:
+    sender: "&aYou placed &f%amount%&a on &f%player%&a. Their bounty is now &f%total%&a."
+    target:
+      - "&6&l🎯 Bounty Increased!"
+      - ""
+      - "&f%actor%&7 added &f%amount%&7 to your bounty."
+      - "&7Previous: &f%previous%"
+      - "&7Added: &f%amount%"
+      - "&7Current: &f%total%"
+  broadcast-added: "&6&l🎯 NEW BOUNTY! &r&f%player% &7now has a &f%total% &7bounty! &8(&f%actor%&8)"
+  list:
+    header: "&6&lBounties &8» &7%count% player(s)"
+    line: "&f%rank%. &7%player% &8· &6%amount%"
+    empty: "&7Nobody has a bounty right now. Place one with &f/bounty add <player> <amount>&7."
+  check:
+    has: "&f%player%&7's current bounty is &6%amount%&7."
+    none: "&f%player%&7 has no bounty."
+  # %killer% claimed %player%'s bounty of %amount%.
+  claim:
+    killer:
+      - "&6&l🎯 Bounty Claimed!"
+      - ""
+      - "&7You claimed &f%player%&7's &6%amount%&7 bounty."
+    target:
+      - "&c&l☠ Your Bounty Was Claimed!"
+      - ""
+      - "&f%killer%&7 claimed your &6%amount%&7 bounty."
+    broadcast: "&6&l⚔ BOUNTY CLAIMED! &r&f%killer% &7claimed &f%player%&7's &6%amount%&7 bounty!"
+    refund: "&7Your own &f%amount%&7 of that bounty came back to you."
+    blocked: "&c%player%&c's bounty can't be claimed again so soon — wait &f%seconds%s&c."
+    failed: "&cThe economy refused the payout, so the bounty stays where it is."
+  prompt:
+    amount: "&7Type how much to add to &f%player%&7's bounty in chat (&f%minimum%&7-&f%maximum%&7), or &fcancel&7."
+    cancelled: "&7Nothing was placed."
+  gui:
+    self-name: "&bYour Bounty"
+    self-lore:
+      - "&6💰 %amount%"
+      - ""
+      - "&7Click to add to your own bounty"
+      - "&8Killing you pays the killer — your own"
+      - "&8share comes back to you afterwards."
+    head-name: "&b%player%"
+    head-lore:
+      - "&6💰 Bounty: %amount%"
+      - ""
+      - "&7Click to view or add to this bounty"
+    sorting-name: "&bSorting"
+    sorting-lore:
+      - "&7Current: &f%mode%"
+      - ""
+      - "&7Click to switch between"
+      - "&7highest first and lowest first."
+    sort-highest: "Highest → Lowest"
+    sort-lowest: "Lowest → Highest"
+    page-name: "&bPage %page% / %pages%"
+    page-lore: "&7%count% player(s) with a bounty"
+    previous-name: "&bPrevious Page"
+    next-name: "&bNext Page"
+    close-name: "&cClose"
+    details-title: "&8Bounty: %player%"
+    details-head-lore:
+      - "&6💰 Bounty: %amount%"
+      - ""
+      - "&7Anyone can add to it, and whoever"
+      - "&7kills them takes the lot."
+    add-name: "&6Add Bounty"
+    add-lore:
+      - "&7Left-click: type an amount"
+      - "&7Right-click: quick add &f%quick%"
+    back-name: "&bBack to the Board"
+    empty-name: "&7Nobody has a bounty yet"
+    empty-lore:
+      - "&7Click your own head to put one up,"
+      - "&7or use &f/bounty add <player> <amount>"
+    amount-title: "&8Type Amount: %player%"
+    amount-display: "&6%amount%"
+    amount-lore:
+      - "&7Range: %range%"
+    digit-0: "&e0"
+    digit-1: "&e1"
+    digit-2: "&e2"
+    digit-3: "&e3"
+    digit-4: "&e4"
+    digit-5: "&e5"
+    digit-6: "&e6"
+    digit-7: "&e7"
+    digit-8: "&e8"
+    digit-9: "&e9"
+    amount-clear: "&cClear"
+    amount-back: "&b⌫ Backspace"
+    amount-enter: "&aEnter"
+    # The dialog that opens when a player left-clicks Add, or runs
+    # /bounty add <player> with no amount: one text box, and an Add button.
+    # %player% is whose bounty it is, %minimum%/%maximum% the allowed range and
+    # %balance% what the player has. The wording in the plugin is used for any
+    # of these a config.yml written earlier has never been told about.
+    dialog:
+      title: "&6&lAdd to %player%&6&l's bounty"
+      body: "&7Type how much to add to &f%player%&7's bounty. Anything from
+        &f%minimum%&7 to &f%maximum%&7. Your balance: &f%balance%"
+      field: "&eAmount"
+      confirm: "&a&lAdd the bounty"
+      confirm-tip: "&7Takes the money from your balance"
+      cancel: "&7Cancel"
+    prompt:
+      empty: "&7Nothing was entered."
+      too-low: "&c%input%&c is below the minimum of &f%minimum%&c."
+      too-high: "&c%input%&c is above the maximum of &f%maximum%&c."

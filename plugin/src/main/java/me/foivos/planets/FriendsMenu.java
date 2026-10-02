@@ -141,7 +141,7 @@ public final class FriendsMenu implements InventoryHolder {
             return;
         }
         if (slot == SEARCH_SLOT) {
-            system.promptSearch(player);
+            system.openSearchDialog(player);
             return;
         }
         if (slot == REQUESTS_SLOT) {
@@ -220,7 +220,7 @@ public final class FriendsMenu implements InventoryHolder {
         }
 
         inventory.setItem(SEARCH_SLOT, MenuStyle.tab(Material.SPYGLASS, "Search", false,
-                "Type a name in chat to look someone up"));
+                "Opens a box to type a name into"));
         int pending = system.requests().incomingCount(viewer.getUniqueId());
         inventory.setItem(REQUESTS_SLOT, MenuStyle.tab(Material.WRITABLE_BOOK, "Requests", false,
                 pending == 0 ? "No requests waiting" : pending + " request(s) waiting",
@@ -264,6 +264,7 @@ public final class FriendsMenu implements InventoryHolder {
         lore.add(line(""));
         lore.add(Component.text("Left-click a head for their profile")
                 .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
+        lore.add(line("Message, gift and teleport from there", NamedTextColor.DARK_GRAY));
         lore.add(Component.text("/friend <player> works too")
                 .color(NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false));
         meta.lore(lore);

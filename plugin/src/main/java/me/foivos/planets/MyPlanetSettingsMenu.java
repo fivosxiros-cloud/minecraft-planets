@@ -58,10 +58,10 @@ public final class MyPlanetSettingsMenu implements InventoryHolder {
             case 12 -> toggle(player, "Mob Spawning", () -> data.mobSpawning(!data.mobSpawning()));
             case 13 -> toggle(player, "Explosions", () -> data.explosions(!data.explosions()));
             case 14 -> toggle(player, "Fire Spread", () -> data.fireSpread(!data.fireSpread()));
-            case 15 -> toggle(player, "Visitor Access", () -> data.visitorAccess(!data.visitorAccess()));
+            case 15 -> toggleAccess(player, "Visitor Access", () -> data.visitorAccess(!data.visitorAccess()));
             case 16 -> toggle(player, "Chest & Door Access", () -> data.chestDoorAccess(!data.chestDoorAccess()));
             case 17 -> toggle(player, "Item Drops", () -> data.itemDrops(!data.itemDrops()));
-            case 18 -> toggle(player, "Public", () -> data.isPublic(!data.isPublic()));
+            case 18 -> toggleAccess(player, "Public", () -> data.isPublic(!data.isPublic()));
             case 21 -> toggle(player, "Structures", () -> data.structures(!data.structures()));
             case 22 -> handleWeather(player);
             case 23 -> handleSellClick(player);
@@ -82,6 +82,21 @@ public final class MyPlanetSettingsMenu implements InventoryHolder {
     private void toggle(Player player, String label, Runnable action) {
         action.run();
         plugin.getMyPlanetManager().save();
+        player.closeInventory();
+        new MyPlanetSettingsMenu(plugin, player, data).open(player);
+    }
+
+    /**
+     * Toggles one of the two members-only switches (Public, Visitor Access)
+     * and, when it was just switched off, moves every non-member out of the
+     * world right away instead of leaving them standing on a closed planet.
+     */
+    private void toggleAccess(Player player, String label, Runnable action) {
+        action.run();
+        plugin.getMyPlanetManager().save();
+        if (!data.isPublic() || !data.visitorAccess()) {
+            plugin.enforcePlanetPrivacy(data);
+        }
         player.closeInventory();
         new MyPlanetSettingsMenu(plugin, player, data).open(player);
     }

@@ -30,18 +30,23 @@ import java.util.List;
  *   🟦 ▤ ▤ ▤ ▤ ▤ ▤ ▤ 🟦
  *   🟦 ▨ ▨ ▨ ▨ ▨ ▨ ▨ 🟦           lines you have hidden
  *   🟦 ▨ ▨ ▨ ▨ ▨ ▨ ▨ 🟦
- *   🟦🟦🟦🟦↺🟦🟦✖🟦🟦           ↺ show every line, ✖ close
+ *   🟦🟦↺🟦↩🟦✖🟦🟦🟦           ↺ every line, ↩ back to /settings, ✖ close
  * </pre>
  *
  * <p>Controls, spelled out on every item: left-click hides (or adds) a line,
- * right-click moves it up, shift-right-click moves it down. Every click
- * redraws the real sidebar behind the menu, so the change is visible at once.
+ * right-click moves it up, shift-right-click moves it down, and
+ * shift-left-click opens {@link SidebarColourMenu} to give that one line a
+ * colour of the player's own — remembered in {@code player-settings.yml}. Every
+ * click redraws the real sidebar behind the menu, so the change is visible at
+ * once.
  */
 public final class SidebarEditorMenu implements InventoryHolder {
 
     private static final int SIZE = 54;
     private static final int INFO_SLOT = 4;
     private static final int RESET_SLOT = 47;
+    /** Back to the /settings page this picker was opened from. */
+    private static final int BACK_SLOT = 49;
     private static final int CLOSE_SLOT = 51;
 
     /** Where the chosen lines sit: two rows of seven, top line first. */
@@ -91,6 +96,14 @@ public final class SidebarEditorMenu implements InventoryHolder {
             player.closeInventory();
             return;
         }
+        if (slot == BACK_SLOT) {
+            PlayerSettings settings = plugin.getPlayerSettings();
+            player.closeInventory();
+            if (settings != null) {
+                new PlayerSettingsMenu(plugin, player, settings).open(player);
+            }
+            return;
+        }
         if (slot == RESET_SLOT) {
             sidebar.chooseLines(player, idsOf(sidebar.lines()));
             player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.8f, 1.4f);
@@ -104,6 +117,13 @@ public final class SidebarEditorMenu implements InventoryHolder {
         int lineSlot = indexOf(LINE_SLOTS, slot);
         if (lineSlot >= 0) {
             if (lineSlot >= shown.size()) {
+                return;
+            }
+            // Shift-left-click is the colour picker: the one click that is not
+            // already spoken for by hiding, moving up or moving down.
+            if (event.isShiftClick() && event.isLeftClick()) {
+                player.closeInventory();
+                new SidebarColourMenu(plugin, player, shown.get(lineSlot)).open(player);
                 return;
             }
             List<String> ids = idsOf(shown);
@@ -164,6 +184,7 @@ public final class SidebarEditorMenu implements InventoryHolder {
         }
 
         inventory.setItem(RESET_SLOT, resetItem());
+        inventory.setItem(BACK_SLOT, backItem());
         inventory.setItem(CLOSE_SLOT, closeItem());
     }
 
@@ -176,6 +197,8 @@ public final class SidebarEditorMenu implements InventoryHolder {
         lore.add(line(sidebar.title(), NamedTextColor.GOLD));
         lore.add(line(""));
         lore.add(line(shownCount() + " of " + sidebar.lines().size() + " lines shown"));
+        lore.add(line(recolouredCount() + " of them in your own colours",
+                recolouredCount() == 0 ? NamedTextColor.GRAY : NamedTextColor.YELLOW));
         lore.add(line("It sits down the right of your screen"));
         lore.add(line("everywhere on the server.", NamedTextColor.DARK_GRAY));
         if (!sidebar.enabled()) {
@@ -183,8 +206,10 @@ public final class SidebarEditorMenu implements InventoryHolder {
             lore.add(line("The sidebar is switched off on this server.", NamedTextColor.RED));
         }
         lore.add(line(""));
-        lore.add(Component.text("Click a line below to change it").color(NamedTextColor.YELLOW)
-                .decoration(TextDecoration.ITALIC, false));
+        lore.add(Component.text("Shift-left-click a line to recolour it")
+                .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
+        lore.add(Component.text("Every colour you pick is saved for you alone")
+                .color(NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false));
         meta.lore(lore);
         item.setItemMeta(meta);
         return item;
@@ -194,17 +219,34 @@ public final class SidebarEditorMenu implements InventoryHolder {
         return sidebar.visibleLines(viewer).size();
     }
 
+    /** How many lines this player has given a colour of their own. */
+    private int recolouredCount() {
+        PlayerSettings settings = plugin.getPlayerSettings();
+        return settings == null ? 0 : settings.sidebarColours(viewer.getUniqueId()).size();
+    }
+
     /** One line of the player's sidebar, previewing exactly what it renders. */
     private ItemStack shownItem(SidebarScoreboard.Line line, int index, int total) {
         ItemStack item = new ItemStack(Material.OAK_SIGN);
         ItemMeta meta = item.getItemMeta();
-        meta.displayName(Component.text(plugin.renderHudTemplate(viewer, line.template()))
-                .color(NamedTextColor.WHITE).decoration(TextDecoration.ITALIC, false));
+        // The preview is built the same way the sidebar itself builds the row,
+        // so the colours on the item are the colours on the screen — except for
+        // the blank row, which draws nothing on the board and would leave the
+        // item with no name at all, so it is named after its label instead.
+        String rendered = SidebarScoreboard.tidy(plugin.renderHudTemplate(viewer, line.template()));
+        meta.displayName(SidebarScoreboard.rendersNothing(rendered)
+                ? Component.text(line.label()).color(NamedTextColor.GRAY)
+                        .decoration(TextDecoration.ITALIC, false)
+                : SidebarScoreboard.styled(rendered, sidebar.lineColour(),
+                        sidebar.chosenColour(viewer, line)));
 
         List<Component> lore = new ArrayList<>();
         lore.add(line("Line: " + line.label(), NamedTextColor.AQUA));
         lore.add(line("Position " + (index + 1) + " of " + total));
+        lore.add(line("Colour: " + colourLabel(line), NamedTextColor.YELLOW));
         lore.add(line(""));
+        lore.add(Component.text("Shift-left-click: change its colour")
+                .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
         lore.add(Component.text("Left-click: hide this line").color(NamedTextColor.YELLOW)
                 .decoration(TextDecoration.ITALIC, false));
         lore.add(Component.text("Right-click: move it up").color(NamedTextColor.YELLOW)
@@ -216,6 +258,14 @@ public final class SidebarEditorMenu implements InventoryHolder {
         return item;
     }
 
+    /** How this line's colour is described on its item: the player's own pick, or the server's. */
+    private String colourLabel(SidebarScoreboard.Line line) {
+        PlayerSettings settings = plugin.getPlayerSettings();
+        String chosen = settings == null
+                ? null : settings.sidebarColour(viewer.getUniqueId(), line.id());
+        return chosen == null ? "the server's colours" : chosen.replace('_', ' ');
+    }
+
     /** One configured line this player has hidden, ready to be added back. */
     private ItemStack hiddenItem(SidebarScoreboard.Line line) {
         ItemStack item = new ItemStack(Material.GRAY_DYE);
@@ -225,7 +275,9 @@ public final class SidebarEditorMenu implements InventoryHolder {
 
         List<Component> lore = new ArrayList<>();
         lore.add(line("Hidden — not on your sidebar"));
-        lore.add(line("Would show: " + plugin.renderHudTemplate(viewer, line.template()),
+        lore.add(line("Would show: "
+                + SidebarScoreboard.withoutCodes(
+                        SidebarScoreboard.tidy(plugin.renderHudTemplate(viewer, line.template()))),
                 NamedTextColor.DARK_GRAY));
         lore.add(line(""));
         lore.add(Component.text("Left-click: add it back").color(NamedTextColor.YELLOW)
@@ -243,6 +295,19 @@ public final class SidebarEditorMenu implements InventoryHolder {
         List<Component> lore = new ArrayList<>();
         lore.add(line("Back to all " + sidebar.lines().size() + " lines,"));
         lore.add(line("in the order the server lists them."));
+        meta.lore(lore);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    private ItemStack backItem() {
+        ItemStack item = new ItemStack(Material.ARROW);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text("\u21A9 Back to Settings").color(NamedTextColor.AQUA)
+                .decoration(TextDecoration.ITALIC, false));
+        List<Component> lore = new ArrayList<>();
+        lore.add(line("Returns to the /settings page with"));
+        lore.add(line("every one of your switches on it."));
         meta.lore(lore);
         item.setItemMeta(meta);
         return item;

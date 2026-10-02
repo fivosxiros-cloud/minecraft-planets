@@ -82,11 +82,29 @@ public final class MyPlanetMenu implements InventoryHolder {
             case 22 -> openIconMenu(player);
             case 23 -> handleSellClick(player);
             case 24 -> openVisitorsMenu(player);
+            case 31 -> openFriendsMenu(player);
+            case 33 -> openPermissionsHint(player);
             // Row 4 — danger zone
             case 39 -> openAbandonMenu(player);
             // Row 5 — back
             case 49 -> plugin.openMyPlanetSelect(player);
+            case 25 -> openVisitRequests(player);
         }
+    }
+
+    /** Opens the visit requests players sent from the star chart. */
+    private void openVisitRequests(Player player) {
+        player.closeInventory();
+        new MyPlanetVisitRequestsMenu(plugin, player, data).open(player);
+    }
+
+    /** Visit requests from the star chart, with a count when there are any. */
+    private ItemStack visitRequestsItem() {
+        int count = data.visitRequestCount();
+        return actionItem(Material.PLAYER_HEAD,
+                count > 0 ? "\uD83D\uDCE8 Visit Requests (" + count + ")" : "\uD83D\uDCE8 Visit Requests",
+                count > 0 ? "Approve or turn away players asking to visit"
+                        : "Nobody is asking to visit right now");
     }
 
     // ── Sub-menu openers ──────────────────────────────────────────────────
@@ -171,10 +189,35 @@ public final class MyPlanetMenu implements InventoryHolder {
         new MyPlanetAbandonMenu(plugin, player, data).open(player);
     }
 
-    /** Opens the Kick Visitors menu (owner or co-owner). */
+    /** Opens the friend roster for this planet (owner/co-owner/moderator). */
+    private void openFriendsMenu(Player player) {
+        if (plugin.friendSystem() == null) {
+            player.sendMessage(Component.text("The friends system isn't available right now.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        if (!data.canManageMembers(player.getUniqueId())) {
+            player.sendMessage(Component.text("Only the owner, co-owner, or moderator can invite players.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        player.closeInventory();
+        new MyPlanetFriendsMenu(plugin, player, data).open(player);
+    }
+
+    /** Points at the per-member permissions, which live on the Members screen. */
+    private void openPermissionsHint(Player player) {
+        player.sendMessage(Component.text("Shift-click a member on this screen to set their permissions.")
+                .color(NamedTextColor.AQUA));
+        player.closeInventory();
+        new MyPlanetMembersMenu(plugin, player, data).open(player);
+    }
+
+    /** Opens the Kick Visitors menu (owner, co-owner, or a member allowed to kick). */
     private void openVisitorsMenu(Player player) {
-        if (!data.canManage(player.getUniqueId())) {
-            player.sendMessage(Component.text("Only the owner or co-owner can kick visitors.").color(NamedTextColor.RED));
+        if (!plugin.canKickVisitors(data, player)) {
+            player.sendMessage(Component.text("Only the owner, co-owner, or a member with the "
+                    + "Kick Visitors permission can kick visitors.").color(NamedTextColor.RED));
             return;
         }
         player.closeInventory();
@@ -326,9 +369,16 @@ public final class MyPlanetMenu implements InventoryHolder {
         inventory.setItem(24, actionItem(Material.LEAD, "🦶 Kick Visitors",
                 "Remove unwanted players from your planet"));
 
-        // Row 3 — live info
+        // Requests players sent from the /ship star chart (slot 25)
+        inventory.setItem(25, visitRequestsItem());
+
+        // Row 3 — live info and the two newer tools
         inventory.setItem(30, liveVisitorsItem());
+        inventory.setItem(31, actionItem(Material.PLAYER_HEAD, "\uD83E\uDD1D Friends",
+                "Invite the people on your friends list"));
         inventory.setItem(32, blockStatsItem());
+        inventory.setItem(33, actionItem(Material.TRIPWIRE_HOOK, "\uD83D\uDD11 Permissions",
+                "Per-member permissions \u2014 opens the member list"));
 
         // Row 4 — danger zone
         inventory.setItem(39, dangerItem(Material.TNT, "🗑 Abandon Planet",

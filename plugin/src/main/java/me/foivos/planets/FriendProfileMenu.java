@@ -32,7 +32,7 @@ import java.util.UUID;
  *   🟦 ▣ ▣ ▣ ▣ ▣ ▣ ▣ 🟦
  *   🟦 🟢 ▣ 📍 ▣ 🕓 ▣ 🔗 🟦        status, where, last seen, mutual
  *   🟦 ▣ ▣ ▣ ▣ ▣ ▣ ▣ 🟦
- *   🟦 ↩ 💬 ★ 🎁 ▣ 🔗 ▣ ✖ ▣ 🟦    back, message, favourite, gift, mutual, remove, close
+ *   🟦 ↩ 💬 ★ 🎁 🧭 🔗 ✖ 🟦        back, message, favourite, gift, teleport, mutual, remove, close
  *   🟦🟦🟦🟦🟦🟦🟦🟦🟦
  * </pre>
  *
@@ -57,6 +57,8 @@ public final class FriendProfileMenu implements InventoryHolder {
     private static final int MESSAGE_SLOT = 46;
     private static final int FAVORITE_SLOT = 47;
     private static final int GIFT_SLOT = 48;
+    /** Asks them to teleport, right beside the message and gift buttons. */
+    private static final int TELEPORT_SLOT = 49;
     private static final int MUTUAL_ACTION_SLOT = 50;
     private static final int REMOVE_SLOT = 52;
     private static final int CLOSE_SLOT = 53;
@@ -106,6 +108,18 @@ public final class FriendProfileMenu implements InventoryHolder {
         }
         if (slot == GIFT_SLOT) {
             system.promptGift(player, target);
+            return;
+        }
+        if (slot == TELEPORT_SLOT) {
+            if (!system.friends().areFriends(player.getUniqueId(), target)) {
+                player.sendMessage(Component.text("\uD83E\uDDED You can only ask a friend to teleport.")
+                        .color(NamedTextColor.RED));
+                return;
+            }
+            // Left-click asks to come to them, right-click asks them to come to
+            // you: the same pair as /tpa and /tpahere, shared with the commands.
+            system.requestTeleport(player, target, event.isRightClick());
+            render();
             return;
         }
         if (slot == MUTUAL_ACTION_SLOT || slot == MUTUAL_SLOT) {
@@ -191,6 +205,7 @@ public final class FriendProfileMenu implements InventoryHolder {
                 isFriend
                         ? (plugin.hasEconomy() ? "Send them some of your VPL" : "The economy is unavailable")
                         : "You can only gift friends"));
+        inventory.setItem(TELEPORT_SLOT, teleportItem(isFriend));
         inventory.setItem(MUTUAL_ACTION_SLOT, button(Material.COMPARATOR,
                 "\uD83D\uDD17 Mutual Friends",
                 NamedTextColor.AQUA,
@@ -411,6 +426,42 @@ public final class FriendProfileMenu implements InventoryHolder {
         lore.add(line(""));
         lore.add(Component.text("Click to open the mutual friends list")
                 .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
+        meta.lore(lore);
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    /**
+     * The teleport button: one click sends the same request /tpa or /tpahere
+     * sends. It needs a friend who is online right now — a request cannot wait
+     * for somebody to log in — and it is up to them to answer it, so the item
+     * says which way the teleport would go.
+     */
+    private ItemStack teleportItem(boolean isFriend) {
+        boolean online = isFriend && system.presence().isOnline(target);
+        ItemStack item = new ItemStack(online ? Material.ENDER_PEARL : Material.GRAY_DYE);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text("\uD83E\uDDED Teleport Request")
+                .color(online ? NamedTextColor.AQUA : NamedTextColor.GRAY)
+                .decoration(TextDecoration.ITALIC, false));
+
+        List<Component> lore = new ArrayList<>();
+        if (!isFriend) {
+            lore.add(line("You can only teleport to a friend"));
+        } else if (!online) {
+            lore.add(line(system.friends().nameOf(target) + " is offline", NamedTextColor.GRAY));
+            lore.add(line("Teleport requests need them online.", NamedTextColor.DARK_GRAY));
+        } else {
+            lore.add(line("Asks " + system.friends().nameOf(target) + " to allow it",
+                    NamedTextColor.GREEN));
+            lore.add(line("They answer with /tpaccept or /tpdeny", NamedTextColor.DARK_GRAY));
+            lore.add(line(""));
+            lore.add(Component.text("Left-click: teleport to them \u2714")
+                    .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
+            lore.add(Component.text("Right-click: ask them to come to you")
+                    .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
+            lore.add(line("The choice is theirs", NamedTextColor.GRAY));
+        }
         meta.lore(lore);
         item.setItemMeta(meta);
         return item;
