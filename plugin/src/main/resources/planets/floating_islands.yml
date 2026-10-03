@@ -1,0 +1,237 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  FLOATING ISLANDS — disconnected terrain hanging in the sky.
+#
+#  This planet does not use a heightmap at all: the floating-islands module
+#  thresholds a 3D noise field around each blob's own centre, so the tops are
+#  bumpy, the undersides taper into roots, and there is genuine air between them.
+#  Falling off is the point, so there is no liquid and no sea level.
+# ══════════════════════════════════════════════════════════════════════════════
+
+id: floating_islands
+display-name: "Floating Islands"
+description: "Sky archipelagos drifting over an endless drop."
+icon: END_STONE_BRICKS
+style: floating_islands
+seed: random
+
+palette:
+  stone: STONE
+  deepslate: DEEPSLATE
+  dirt: DIRT
+  grass: GRASS_BLOCK
+  sand: SAND
+  gravel: GRAVEL
+  ice: PACKED_ICE
+  lava: LAVA
+  root: HANGING_ROOTS
+
+terrain:
+  height:
+    base: 120
+    min: 30
+    max: 260
+  sea-level: 0
+  liquid: null
+  vertical-scale: 1.0
+  horizontal-scale: 1.0
+  layers: {}
+  mountains:
+    enabled: false
+  valleys:
+    enabled: false
+  canyons:
+    enabled: false
+  cliffs:
+    enabled: false
+  plateaus:
+    enabled: false
+  detail-strength: 0
+  detail-frequency: 0.02
+
+  # The islands themselves. density is how much sky is solid — raise it for
+  # bigger, more connected landmasses; min/max size are the blob radii, and
+  # underside-depth is how deep the tapered root hangs below each island.
+  floating-islands:
+    enabled: true
+    density: 0.038
+    min-size: 9
+    max-size: 30
+    min-y: 70
+    max-y: 205
+    noise-scale: 0.055
+    underside-depth: 7
+    core: STONE
+    shell: GRASS_BLOCK
+    underside: DEEPSLATE
+
+surface:
+  layers:
+    - { block: GRASS_BLOCK, depth: 1 }
+    - { block: DIRT, depth: 3 }
+    - { block: STONE, depth: 14 }
+    - { block: DEEPSLATE, depth: 999 }
+
+biomes:
+  sky_meadow:
+    biome: meadow
+    priority: 0
+    temperature: { min: 0.3, max: 1.0 }
+    humidity: { min: 0.0, max: 0.6 }
+    vegetation: { density: 0.9 }
+    decorations: [grass, flower_patch, sky_tree]
+
+  sky_forest:
+    biome: forest
+    priority: 1
+    temperature: { min: 0.3, max: 1.0 }
+    humidity: { min: 0.55, max: 1.0 }
+    vegetation: { density: 1.5 }
+    decorations: [grass, sky_tree, boulder]
+
+  cold_sky:
+    biome: snowy_plains
+    priority: 2
+    temperature: { min: 0.0, max: 0.32 }
+    humidity: { min: 0.0, max: 1.0 }
+    vegetation: { density: 0.2 }
+    decorations: [snow_patch, ice_shard]
+
+  sky_waste:
+    biome: the_end
+    priority: 1
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    weirdness: { min: 0.5, max: 1.0 }
+    surface:
+      - { block: END_STONE, depth: 3 }
+      - { block: STONE, depth: 12 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.1 }
+    decorations: [boulder]
+
+caves:
+  enabled: false
+
+structures:
+  enabled: true
+  density: 1.0
+  max-per-chunk: 1
+  min-distance: 180
+
+  types:
+    sky_platform:
+      type: platform
+      rarity: 0.02
+      cell-size: 200
+      max-slope: 20
+      palette:
+        primary: DEEPSLATE_TILES
+        accent: CHISELED_DEEPSLATE
+      params: { radius: 9, thickness: 2 }
+
+    sky_tower:
+      type: tower
+      rarity: 0.008
+      cell-size: 320
+      max-slope: 6
+      palette:
+        primary: END_STONE_BRICKS
+        accent: PURPUR_BLOCK
+        light: END_ROD
+      params: { height: 26, base-width: 4 }
+
+  landmarks:
+    sky_citadel:
+      type: temple
+      rarity: 0.0012
+      cell-size: 1200
+      min-distance: 800
+      announce: true
+      scale: 1.6
+      palette:
+        primary: END_STONE_BRICKS
+        accent: GOLD_BLOCK
+      params: { size: 15, steps: 5 }
+
+    floating_monolith:
+      type: monument
+      rarity: 0.0018
+      cell-size: 1000
+      min-distance: 700
+      announce: true
+      palette:
+        primary: OBSIDIAN
+        accent: END_ROD
+      params: { shape: spire, height: 40 }
+
+decorations:
+  enabled: true
+  density: 1.0
+  types:
+    grass:
+      type: grass
+      density: 40
+      on: [grass_block]
+      params: { block: SHORT_GRASS }
+
+    flower_patch:
+      type: flower
+      density: 12
+      biomes: [sky_meadow]
+      on: [grass_block]
+      params: { blocks: [DANDELION, POPPY, CORNFLOWER, ALLIUM] }
+
+    sky_tree:
+      type: tree
+      density: 4
+      biomes: [sky_forest, sky_meadow]
+      on: [grass_block]
+      max-slope: 4
+      params:
+        trunk: OAK_LOG
+        leaves: OAK_LEAVES
+        height: 7
+        canopy-radius: 3
+        canopy: blob
+
+    boulder:
+      type: rock
+      density: 3
+      on: [grass_block, stone, end_stone]
+      params: { block: COBBLESTONE, radius: 2 }
+
+    snow_patch:
+      type: lichen
+      density: 10
+      biomes: [cold_sky]
+      on: [grass_block, stone]
+      params: { block: SNOW_BLOCK, radius: 3 }
+
+    ice_shard:
+      type: crystal
+      density: 3
+      biomes: [cold_sky]
+      params: { block: PACKED_ICE, tip: BLUE_ICE, height: 4, count: 3 }
+
+atmosphere:
+  sky-color: "#6FA8FF"
+  fog-color: "#C8DDFF"
+  haze-density: 7
+  particles:
+    - { type: glow, density: 6, radius: 6 }
+  weather: clear
+  precipitation: false
+  # Thin air: floaty falls and a higher jump.
+  effects:
+    jump: 1
+    fall: 1
+  music:
+    tracks:
+      - "MUSIC_END:200"
+      - "MUSIC_OVERWORLD_MEADOW:210"
+
+features:
+  sky_structures: true
+
+gameplay:
+  fall-hazard: true

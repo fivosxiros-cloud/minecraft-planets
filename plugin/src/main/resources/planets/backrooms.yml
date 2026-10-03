@@ -1,0 +1,139 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  BACKROOMS — procedural architecture rather than landscape.
+#
+#  There is no terrain here: the whole planet is a deterministic maze of rooms,
+#  corridors, intersections and dead ends, generated from the world seed. No
+#  natural caves, no vegetation, no weather. Just the hum of the lights.
+# ══════════════════════════════════════════════════════════════════════════════
+
+id: backrooms
+display-name: "Backrooms"
+description: "Endless yellow rooms, buzzing lights and no way out."
+icon: YELLOW_TERRACOTTA
+style: backrooms
+seed: random
+
+palette:
+  floor: YELLOW_TERRACOTTA
+  wall: YELLOW_TERRACOTTA
+  accent: SMOOTH_SANDSTONE
+  ceiling: SMOOTH_SANDSTONE
+  carpet: YELLOW_CARPET
+  damp: MOSS_BLOCK
+  water: WATER
+
+# The floor plan. cell-size is the wall grid pitch: bigger means wider halls and
+# longer straight runs. wall-threshold is how much of the grid becomes wall —
+# raise it for more open space, lower it for a tighter maze.
+layout:
+  floor: 24
+  ceiling-height: 5
+  floor-thickness: 2
+  ceiling-thickness: 2
+  cell-size: 7
+  wall-threshold: 0.44
+  # Large open halls, where the plan has no walls at all. Rarer = more maze.
+  hall-scale: 11
+  hall-threshold: 0.6
+  lights: true
+  bedrock-floor: false
+
+terrain:
+  height:
+    base: 24
+    min: 20
+    max: 40
+  sea-level: 0
+  liquid: null
+  layers: {}
+
+# A planet-wide surface so nothing is ever bare, though the module paints its own
+# floor and ceiling over it.
+surface:
+  layers:
+    - { block: YELLOW_TERRACOTTA, depth: 4 }
+    - { block: STONE, depth: 12 }
+
+biomes:
+  level_0:
+    biome: plains
+    priority: 0
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    surface:
+      - { block: YELLOW_TERRACOTTA, depth: 4 }
+      - { block: STONE, depth: 12 }
+    vegetation: { density: 0.0 }
+    decorations: []
+
+  damp_wing:
+    biome: lush_caves
+    priority: 3
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.72, max: 1.0 }
+    surface:
+      - { block: MOSS_BLOCK, depth: 3 }
+      - { block: YELLOW_TERRACOTTA, depth: 3 }
+      - { block: STONE, depth: 12 }
+    vegetation: { density: 0.0 }
+    decorations: [ceiling_drip, puddle]
+
+  poolrooms:
+    biome: ocean
+    priority: 4
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    weirdness: { min: 0.45, max: 1.0 }
+    surface:
+      - { block: SMOOTH_QUARTZ, depth: 3 }
+      - { block: LIGHT_BLUE_TERRACOTTA, depth: 3 }
+      - { block: STONE, depth: 12 }
+    vegetation: { density: 0.0 }
+    decorations: []
+
+# No natural caves: a Backrooms planet with holes in the walls is a broken one.
+caves:
+  enabled: false
+
+# The rooms are the structure, so nothing else gets built.
+structures:
+  enabled: false
+
+decorations:
+  enabled: true
+  density: 1.0
+  types:
+    ceiling_drip:
+      type: vine
+      density: 3
+      biomes: [damp_wing]
+      params: { block: HANGING_ROOTS, length: 3 }
+
+    puddle:
+      type: lichen
+      density: 2
+      biomes: [damp_wing]
+      params: { block: MOSS_CARPET, radius: 2 }
+
+atmosphere:
+  sky-color: "#C8B560"
+  fog-color: "#B8A050"
+  haze-density: 3
+  particles:
+    - { type: dust, density: 3, radius: 5, color: "#D8C878" }
+  weather: clear
+  # Eternal fluorescent afternoon: the light never changes.
+  time: 6000
+  precipitation: false
+  effects: {}
+  music:
+    tracks:
+      - "MUSIC_OVERWORLD_DEEP_DARK:220"
+
+features:
+  backrooms_entities: false
+  backrooms_levels: false
+
+gameplay:
+  custom-mob-spawning: false
+  darkness-mechanics: false

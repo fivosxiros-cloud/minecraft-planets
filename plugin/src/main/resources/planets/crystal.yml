@@ -1,0 +1,270 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  CRYSTAL — a geode world where the ground itself is gemstone.
+#
+#  Pale stone rising into ridges that sprout crystal spires, caverns lined
+#  with amethyst, and a sky that shimmers with colour. Tune the palette to
+#  re-theme the whole planet in one place.
+# ══════════════════════════════════════════════════════════════════════════════
+
+id: crystal
+display-name: "Crystal"
+description: "Mountains of quartz and caverns that hum with light."
+icon: AMETHYST_BLOCK
+style: mountain_world
+seed: random
+
+palette:
+  stone: CALCITE
+  dirt: WHITE_TERRACOTTA
+  grass: AMETHYST_BLOCK
+  sand: QUARTZ_BLOCK
+  gravel: GRAVEL
+  ice: BLUE_ICE
+  lava: LAVA
+  deepslate: DEEPSLATE
+  crystal: AMETHYST_BLOCK
+  shard: AMETHYST_SHARD
+
+terrain:
+  height:
+    base: 84
+    min: 30
+    max: 240
+  sea-level: 40
+  liquid: water
+
+  horizontal-scale: 1.1
+  vertical-scale: 1.2
+
+  layers:
+    continentalness:
+      type: perlin
+      scale: 560
+      amplitude: 26
+      octaves: 3
+    erosion:
+      type: perlin
+      scale: 220
+      amplitude: 14
+      octaves: 4
+    weirdness:
+      type: perlin
+      scale: 160
+      amplitude: 10
+      octaves: 3
+
+  mountains:
+    enabled: true
+    strength: 64
+    scale: 340
+    width: 240
+    sharpness: 0.9
+  valleys:
+    enabled: true
+    strength: 14
+    scale: 300
+    width: 200
+    sharpness: 0.2
+  canyons:
+    enabled: true
+    strength: 20
+    scale: 260
+    width: 0.3
+    sharpness: 0.6
+  cliffs:
+    enabled: true
+    strength: 8
+    width: 4
+    scale: 200
+    sharpness: 0.75
+  plateaus:
+    enabled: false
+
+  detail-strength: 3
+  detail-frequency: 0.024
+  distortion-strength: 16
+  distortion-frequency: 0.0025
+
+  islands:
+    enabled: false
+
+surface:
+  layers:
+    - { block: SNOW_BLOCK, depth: 2, min-altitude: 170 }
+    - { block: CALCITE, depth: 4 }
+    - { block: STONE, depth: 22 }
+    - { block: DEEPSLATE, depth: 999 }
+
+biomes:
+  quartz_plain:
+    biome: windswept_hills
+    priority: 0
+    temperature: { min: 0.0, max: 0.6 }
+    humidity: { min: 0.0, max: 0.6 }
+    surface:
+      - { block: CALCITE, depth: 3 }
+      - { block: STONE, depth: 24 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.3 }
+    decorations: [crystal_spike, shard_cluster, geode_rock]
+
+  amethyst_basin:
+    biome: lush_caves
+    priority: 2
+    temperature: { min: 0.2, max: 0.8 }
+    humidity: { min: 0.4, max: 1.0 }
+    altitude: { max: 90 }
+    surface:
+      - { block: AMETHYST_BLOCK, depth: 2 }
+      - { block: WHITE_TERRACOTTA, depth: 4 }
+      - { block: STONE, depth: 22 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.5 }
+    decorations: [crystal_spike, shard_cluster]
+
+  prism_ridge:
+    biome: snowy_peaks
+    priority: 3
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { min: 150 }
+    surface:
+      - { block: SNOW_BLOCK, depth: 3 }
+      - { block: CALCITE, depth: 4 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.1 }
+    structures: { density: 0.8 }
+    decorations: [crystal_spike]
+
+  glow_cavern_basin:
+    biome: dripstone_caves
+    priority: 4
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { max: 70 }
+    surface:
+      - { block: DEEPSLATE, depth: 6 }
+      - { block: STONE, depth: 24 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.2 }
+    decorations: [shard_cluster]
+
+caves:
+  enabled: true
+  tunnels:
+    enabled: true
+    density: 0.5
+    scale: 100
+    size: 1.1
+    min-y: 12
+    max-y: 90
+  caverns:
+    enabled: true
+    density: 0.14
+    scale: 200
+    size: 2.0
+    min-y: 10
+    max-y: 70
+  underground-lakes: true
+
+structures:
+  enabled: true
+  density: 1.0
+  max-per-chunk: 2
+  min-distance: 140
+
+  types:
+    shard_field:
+      type: crystal
+      rarity: 0.02
+      cell-size: 160
+      biomes: [quartz_plain, amethyst_basin]
+      params: { height: 6, count: 5 }
+
+    crystal_bloom:
+      type: monument
+      rarity: 0.008
+      cell-size: 320
+      biomes: [quartz_plain, prism_ridge]
+      params: { height: 14, shape: crystal }
+
+  landmarks:
+    geode_cathedral:
+      type: temple
+      rarity: 0.0012
+      cell-size: 1100
+      min-distance: 800
+      biomes: [amethyst_basin, quartz_plain]
+      announce: true
+      palette:
+        primary: AMETHYST_BLOCK
+        secondary: CALCITE
+        accent: DIAMOND_BLOCK
+      params: { size: 15, steps: 5 }
+
+    crystal_spire:
+      type: monument
+      rarity: 0.002
+      cell-size: 900
+      min-distance: 600
+      biomes: [prism_ridge, quartz_plain]
+      announce: true
+      scale: 2.2
+      params: { height: 26, shape: obelisk }
+
+decorations:
+  enabled: true
+  density: 1.2
+  types:
+    crystal_spike:
+      type: crystal
+      density: 3
+      on: [calcite, stone, snow_block, amethyst_block]
+      params: { block: AMETHYST_BLOCK, tip: PURPLE_STAINED_GLASS, height: 5, count: 3 }
+
+    shard_cluster:
+      type: crystal
+      density: 5
+      on: [calcite, stone, deepslate, amethyst_block]
+      params: { block: AMETHYST_SHARD, height: 2, count: 4 }
+
+    geode_rock:
+      type: rock
+      density: 3
+      on: [calcite, stone, snow_block]
+      params: { block: CALCITE, radius: 3 }
+
+atmosphere:
+  sky-color: "#C8B8F5"
+  fog-color: "#A88FE0"
+  haze-density: 5
+  particles:
+    - { type: end_rod, density: 7, radius: 5 }
+    - { type: dust, density: 5, radius: 4, color: "#D0B8FF" }
+  weather: clear
+  effects:
+    jump: 1
+  music:
+    tracks:
+      - "MUSIC_END:260"
+      - "MUSIC_NETHER_BASALT_DELTAS:220"
+
+features:
+  crystal_flora: true
+  alien_entities: false
+  environmental_hazards: false
+
+gameplay:
+  custom-mob-spawning: false
+  environmental-hazards: false
+
+client:
+  resource-pack:
+    enabled: false
+    url: ""
+    sha1: ""
+    required: false
+
+integrations:
+  crystal-client: false

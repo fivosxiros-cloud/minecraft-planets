@@ -111,7 +111,13 @@ final class FriendStore {
         if (!file.exists()) {
             return;
         }
-        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file);
+        YamlConfiguration yaml = new YamlConfiguration();
+        try {
+            yaml.loadFromString(readSanitized(file));
+        } catch (java.io.IOException | org.bukkit.configuration.InvalidConfigurationException ex) {
+            plugin.getLogger().log(Level.WARNING, "Could not read friends.yml", ex);
+            return;
+        }
         ConfigurationSection players = yaml.getConfigurationSection(PLAYERS);
         if (players == null) {
             return;
@@ -177,11 +183,23 @@ final class FriendStore {
                 continue; // never write an empty record back
             }
             String base = PLAYERS + "." + entry.getKey() + ".";
+            // UUIDs are written as plain strings, never as UUID objects: a raw
+            // UUID lands in the file as a `!!java.util.UUID` tag, which Bukkit's
+            // YAML reader refuses on the next load — the whole file comes back
+            // empty and every friend is silently lost across the restart.
             if (!data.friends().isEmpty()) {
-                yaml.set(base + FRIENDS, new ArrayList<>(data.friends()));
+                List<String> friends = new ArrayList<>();
+                for (UUID friend : data.friends()) {
+                    friends.add(friend.toString());
+                }
+                yaml.set(base + FRIENDS, friends);
             }
             if (!data.favorites().isEmpty()) {
-                yaml.set(base + FAVORITES, new ArrayList<>(data.favorites()));
+                List<String> favorites = new ArrayList<>();
+                for (UUID favorite : data.favorites()) {
+                    favorites.add(favorite.toString());
+                }
+                yaml.set(base + FAVORITES, favorites);
             }
             writeRequests(yaml, base + OUT_KEY, data.outgoing());
             writeRequests(yaml, base + IN_KEY, data.incoming());
@@ -203,6 +221,26 @@ final class FriendStore {
     }
 
     // ── Helpers ─────────────────────────────────────────────────────────
+
+    /**
+     * Reads friends.yml with any legacy {@code !!java.util.UUID} tags turned
+     * back into plain strings. A build before the string fix wrote UUIDs as
+     * tagged objects, and Bukkit's YAML reader refuses the tag outright — the
+     * file loads empty and every friend list is lost across the restart. The
+     * tags are textual and predictable, so unwrapping them here recovers a
+     * file written by the old build without anyone editing it by hand.
+     */
+    private static String readSanitized(File file) throws java.io.IOException {
+        java.nio.charset.Charset utf8 = java.nio.charset.StandardCharsets.UTF_8;
+        String raw = new String(java.nio.file.Files.readAllBytes(file.toPath()), utf8);
+        if (!raw.contains("!!java.util.UUID")) {
+            return raw;
+        }
+        String cleaned = raw
+                .replaceAll("!!java.util.UUID\\s*'([^']*)'", "$1")
+                .replaceAll("!!java.util.UUID\\s*([0-9a-fA-F-]{36})", "$1");
+        return cleaned;
+    }
 
     private static void readRequests(ConfigurationSection section, FriendData data, boolean outgoing) {
         if (section == null) {

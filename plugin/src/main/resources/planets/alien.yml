@@ -1,0 +1,364 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  ALIEN — terrain vanilla world generation cannot produce.
+#
+#  The trick is not unusual blocks, it is unusual *shapes*: a very strong domain
+#  warp makes every feature flow and bend, plateaus give the ground flat shelves,
+#  canyons split them, and the surface is glass and fungus rather than grass and
+#  dirt. The crystals are decorations, so they follow the biomes rather than the
+#  terrain.
+# ══════════════════════════════════════════════════════════════════════════════
+
+id: alien
+display-name: "Alien"
+description: "Warped glass plains, fungal forests and crystal spires under a violet sky."
+icon: END_STONE
+style: natural
+seed: random
+
+palette:
+  stone: END_STONE
+  dirt: END_STONE
+  grass: END_STONE
+  sand: PURPUR_BLOCK
+  gravel: TUFF
+  ice: BLUE_ICE
+  lava: LAVA
+  deepslate: DEEPSLATE
+  alien_soil: END_STONE
+  alien_grass: WARPED_NYLIUM
+  glass: PURPLE_STAINED_GLASS
+  crystal: AMETHYST_BLOCK
+  crystal_core: BUDDING_AMETHYST
+
+terrain:
+  height:
+    base: 80
+    min: 30
+    max: 250
+  sea-level: 58
+  # A toxic sea. Any block works, so a planet can have acid, sludge or mercury.
+  liquid: water
+
+  horizontal-scale: 1.1
+  vertical-scale: 1.15
+
+  layers:
+    continentalness:
+      type: perlin
+      scale: 700
+      amplitude: 24
+      octaves: 3
+    erosion:
+      type: billow          # blobby, cloud-like basins
+      scale: 260
+      amplitude: 20
+      octaves: 3
+    weirdness:
+      type: cellular        # honeycomb cells: the "wrongness" dial
+      scale: 200
+      amplitude: 12
+      octaves: 2
+
+  mountains:
+    enabled: true
+    strength: 64
+    scale: 320
+    width: 220
+    sharpness: 0.9
+
+  valleys:
+    enabled: true
+    strength: 18
+    scale: 260
+    width: 140
+    sharpness: 0.3
+
+  canyons:
+    enabled: true
+    strength: 34
+    scale: 260
+    width: 0.5
+    sharpness: 0.85
+
+  cliffs:
+    enabled: true
+    strength: 14
+    width: 7              # tall, sudden steps
+    scale: 150
+    sharpness: 0.8
+
+  plateaus:
+    enabled: true
+    strength: 30
+    scale: 380
+    width: 80
+    sharpness: 0.35
+
+  detail-strength: 5
+  detail-frequency: 0.03
+
+  # The single most important number here: a large warp is what makes the whole
+  # landscape feel non-Euclidean instead of merely hilly.
+  distortion-strength: 46
+  distortion-frequency: 0.0016
+
+  islands:
+    enabled: false
+
+surface:
+  layers:
+    - { block: STONE, depth: 2, min-altitude: 190 }
+    - { block: WARPED_NYLIUM, depth: 1 }
+    - { block: END_STONE, depth: 5 }
+    - { block: DEEPSLATE, depth: 999 }
+
+biomes:
+  glass_wastes:
+    biome: the_end
+    priority: 0
+    temperature: { min: 0.0, max: 0.45 }
+    humidity: { min: 0.0, max: 0.5 }
+    surface:
+      - { block: PURPUR_BLOCK, depth: 2 }
+      - { block: END_STONE, depth: 6 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.25 }
+    decorations: [crystal_cluster, alien_rock, glow_pod]
+
+  spore_forest:
+    biome: warped_forest
+    priority: 2
+    temperature: { min: 0.3, max: 0.8 }
+    humidity: { min: 0.55, max: 1.0 }
+    surface:
+      - { block: WARPED_NYLIUM, depth: 2 }
+      - { block: END_STONE, depth: 5 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 1.7 }
+    decorations: [alien_grass, fungal_tree, giant_fungus, glow_pod, crystal_cluster]
+
+  crystal_highlands:
+    biome: stony_peaks
+    priority: 3
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { min: 120 }
+    surface:
+      - { block: CALCITE, depth: 2 }
+      - { block: SMOOTH_BASALT, depth: 4 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.4 }
+    structures: { density: 1.6 }
+    decorations: [crystal_cluster, crystal_spire, glow_pod]
+
+  toxic_sea:
+    biome: warm_ocean
+    priority: 2
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { max: 58 }
+    surface:
+      - { block: PRISMARINE, depth: 3 }
+      - { block: END_STONE, depth: 4 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.0 }
+    decorations: [glow_pod]
+
+  crystal_shore:
+    biome: stony_shore
+    priority: 4
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { min: 58, max: 64 }
+    surface:
+      - { block: SMOOTH_BASALT, depth: 3 }
+      - { block: END_STONE, depth: 5 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.15 }
+    decorations: [crystal_cluster, alien_rock]
+
+caves:
+  enabled: true
+  tunnels:
+    enabled: true
+    density: 0.6
+    scale: 110
+    size: 1.2
+    min-y: 10
+    max-y: 90
+  caverns:
+    enabled: true
+    density: 0.14
+    scale: 240
+    size: 2.4
+    min-y: 8
+    max-y: 70
+  # Alien planets get the glowing caverns: every cavern is lined with crystal.
+  crystal-caves:
+    enabled: true
+    density: 0.1
+    scale: 260
+    size: 2.4
+    min-y: 8
+    max-y: 60
+    lining: AMETHYST_BLOCK
+    lining-depth: 1
+  underground-lakes: false
+
+structures:
+  enabled: true
+  density: 1.0
+  max-per-chunk: 2
+  min-distance: 140
+
+  types:
+    crystal_spire_field:
+      type: crystal
+      rarity: 0.02
+      cell-size: 200
+      biomes: [crystal_highlands, glass_wastes]
+      max-slope: 6
+      scale: 1.6
+      palette:
+        accent: AMETHYST_BLOCK
+        rare: BUDDING_AMETHYST
+
+    alien_monument:
+      type: monument
+      rarity: 0.008
+      cell-size: 340
+      biomes: [glass_wastes, crystal_highlands]
+      max-slope: 4
+      palette:
+        primary: SMOOTH_BASALT
+        accent: AMETHYST_BLOCK
+      params: { shape: crystal, height: 22 }
+
+    crashed_probe:
+      type: crashed-ship
+      rarity: 0.006
+      cell-size: 300
+      biomes: [glass_wastes, spore_forest]
+      max-slope: 4
+      scale: 0.8
+      palette:
+        primary: COPPER_BLOCK
+        secondary: DEEPSLATE_TILES
+        glass: CYAN_STAINED_GLASS
+      params: { length: 12 }
+
+  landmarks:
+    great_spire:
+      type: monument
+      rarity: 0.0008
+      cell-size: 1400
+      min-distance: 900
+      biomes: [crystal_highlands]
+      announce: true
+      scale: 1.8
+      palette:
+        primary: AMETHYST_BLOCK
+        accent: BUDDING_AMETHYST
+      params: { shape: spire, height: 70 }
+
+    floating_monolith:
+      type: platform
+      rarity: 0.0015
+      cell-size: 1000
+      min-distance: 600
+      biomes: [glass_wastes, crystal_highlands]
+      announce: true
+      scale: 1.4
+      palette:
+        primary: OBSIDIAN
+        accent: AMETHYST_BLOCK
+      params: { radius: 12, thickness: 3 }
+
+decorations:
+  enabled: true
+  density: 1.0
+  types:
+    alien_grass:
+      type: grass
+      density: 30
+      biomes: [spore_forest]
+      on: [warped_nylium, end_stone]
+      params: { block: WARPED_ROOTS }
+
+    fungal_tree:
+      type: tree
+      density: 3
+      biomes: [spore_forest]
+      on: [warped_nylium, end_stone]
+      scale: 1.2
+      params:
+        trunk: WARPED_STEM
+        leaves: WARPED_WART_BLOCK
+        height: 9
+        canopy-radius: 4
+        canopy: blob
+
+    giant_fungus:
+      type: giant-tree
+      density: 0.8
+      biomes: [spore_forest]
+      scale: 1.2
+      params:
+        trunk: CRIMSON_STEM
+        leaves: SHROOMLIGHT
+        height: 22
+        radius: 6
+        branches: 4
+
+    crystal_cluster:
+      type: crystal
+      density: 6
+      biomes: [glass_wastes, crystal_highlands, crystal_shore]
+      on: [end_stone, smooth_basalt, calcite, purpur_block]
+      params: { block: AMETHYST_BLOCK, tip: BUDDING_AMETHYST, height: 6, count: 4 }
+
+    crystal_spire:
+      type: crystal
+      density: 1.2
+      biomes: [crystal_highlands]
+      scale: 1.8
+      params: { block: AMETHYST_BLOCK, tip: BUDDING_AMETHYST, height: 11, count: 3 }
+
+    alien_rock:
+      type: rock
+      density: 4
+      on: [end_stone, smooth_basalt, purpur_block]
+      params: { block: SMOOTH_BASALT, radius: 3 }
+
+    glow_pod:
+      type: spore-pod
+      density: 1.5
+      biomes: [spore_forest, glass_wastes]
+      params: { block: SHROOMLIGHT, height: 2, light: GLOWSTONE }
+
+atmosphere:
+  sky-color: "#7A3FC8"
+  fog-color: "#3A1560"
+  haze-density: 12
+  particles:
+    - { type: magic, density: 10, radius: 4 }
+    - { type: dust, density: 6, radius: 6, color: "#B070FF" }
+  weather: clear
+  # Alien gravity and air: you jump higher, fall slower and never drown.
+  effects:
+    jump: 2
+    fall: 1
+    breath: 1
+  music:
+    tracks:
+      - "MUSIC_END:200"
+      - "MUSIC_OVERWORLD_LUSH_CAVES:300"
+
+features:
+  alien_crystals: true
+  alien_entities: false
+  glowing_caverns: true
+
+gameplay:
+  custom-mob-spawning: false
+  environmental-hazards: false

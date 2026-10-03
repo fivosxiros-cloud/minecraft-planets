@@ -1,0 +1,300 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  DESERT — dunes, mesas and dry canyons under a burning sky.
+#
+#  A hot, dry world: broad sand seas with dune ripples, red rock mesas,
+#  salt flats, the occasional oasis and deep sandstone cave systems.
+# ══════════════════════════════════════════════════════════════════════════════
+
+id: desert
+display-name: "Desert"
+description: "Endless dunes, red mesas and the bones of forgotten caravans."
+icon: SAND
+style: natural
+seed: random
+
+palette:
+  stone: SANDSTONE
+  dirt: RED_SAND
+  grass: CACTUS
+  sand: SAND
+  gravel: GRAVEL
+  ice: WHITE_WOOL
+  lava: LAVA
+  deepslate: DEEPSLATE
+  terracotta: ORANGE_TERRACOTTA
+
+terrain:
+  height:
+    base: 68
+    min: 24
+    max: 200
+  sea-level: 56
+  liquid: water
+
+  horizontal-scale: 1.2
+  vertical-scale: 0.8
+
+  layers:
+    continentalness:
+      type: perlin
+      scale: 700
+      amplitude: 22
+      octaves: 3
+    erosion:
+      type: perlin
+      scale: 260
+      amplitude: 14
+      octaves: 4
+    weirdness:
+      type: perlin
+      scale: 170
+      amplitude: 8
+      octaves: 3
+
+  # Dune-like ridged mesas: sharp tops, flat shoulders.
+  mountains:
+    enabled: true
+    strength: 42
+    scale: 420
+    width: 300
+    sharpness: 0.55
+  valleys:
+    enabled: true
+    strength: 10
+    scale: 340
+    width: 240
+    sharpness: 0.2
+  canyons:
+    enabled: true
+    strength: 30
+    scale: 260
+    width: 0.3
+    sharpness: 0.8
+  cliffs:
+    enabled: true
+    strength: 6
+    width: 5
+    scale: 220
+    sharpness: 0.7
+  plateaus:
+    enabled: true
+    strength: 26
+    scale: 380
+    width: 70
+    sharpness: 0.6
+
+  detail-strength: 4.5
+  detail-frequency: 0.03
+  distortion-strength: 10
+  distortion-frequency: 0.002
+
+  islands:
+    enabled: false
+
+surface:
+  layers:
+    - { block: SAND, depth: 5 }
+    - { block: SANDSTONE, depth: 6 }
+    - { block: STONE, depth: 20 }
+    - { block: DEEPSLATE, depth: 999 }
+
+biomes:
+  dune_sea:
+    biome: desert
+    priority: 0
+    temperature: { min: 0.6, max: 1.0 }
+    humidity: { min: 0.0, max: 0.35 }
+    surface:
+      - { block: SAND, depth: 6 }
+      - { block: SANDSTONE, depth: 8 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.12 }
+    structures: { density: 1.2 }
+    decorations: [cactus_patch, dry_bush, bone_scatter]
+
+  red_mesa:
+    biome: badlands
+    priority: 2
+    temperature: { min: 0.7, max: 1.0 }
+    humidity: { min: 0.0, max: 0.3 }
+    altitude: { min: 84 }
+    surface:
+      - { block: RED_SAND, depth: 3 }
+      - { block: ORANGE_TERRACOTTA, depth: 8 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.08 }
+    structures: { density: 1.5 }
+    decorations: [cactus_patch, bone_scatter]
+
+  rocky_desert:
+    biome: stony_desert
+    priority: 1
+    temperature: { min: 0.5, max: 1.0 }
+    humidity: { min: 0.0, max: 0.4 }
+    surface:
+      - { block: GRAVEL, depth: 2 }
+      - { block: SANDSTONE, depth: 5 }
+      - { block: STONE, depth: 22 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.15 }
+    decorations: [dry_bush, boulder, bone_scatter]
+
+  salt_flat:
+    biome: savanna
+    priority: 3
+    temperature: { min: 0.8, max: 1.0 }
+    humidity: { min: 0.0, max: 0.15 }
+    altitude: { max: 66 }
+    surface:
+      - { block: WHITE_CONCRETE_POWDER, depth: 2 }
+      - { block: SAND, depth: 4 }
+      - { block: SANDSTONE, depth: 8 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.0 }
+    decorations: [boulder]
+
+  desert_night:
+    biome: desert
+    priority: 4
+    temperature: { min: 0.0, max: 0.6 }
+    humidity: { min: 0.0, max: 0.5 }
+    vegetation: { density: 0.2 }
+    decorations: [cactus_patch, dry_bush]
+
+caves:
+  enabled: true
+  tunnels:
+    enabled: true
+    density: 0.4
+    scale: 110
+    size: 0.9
+    min-y: 12
+    max-y: 70
+  caverns:
+    enabled: true
+    density: 0.08
+    scale: 230
+    size: 1.6
+    min-y: 10
+    max-y: 56
+  underground-lakes: false
+  overrides:
+    salt_flat:
+      enabled: false
+
+structures:
+  enabled: true
+  density: 1.0
+  max-per-chunk: 2
+  min-distance: 130
+
+  types:
+    dune_camp:
+      type: campsite
+      rarity: 0.01
+      cell-size: 240
+      biomes: [dune_sea, rocky_desert]
+      max-slope: 4
+      params: { tents: 2, campfire: false }
+
+    old_well:
+      type: well
+      rarity: 0.012
+      cell-size: 220
+      biomes: [dune_sea, rocky_desert]
+      max-slope: 2
+
+    caravan_remains:
+      type: dead-tree
+      rarity: 0.015
+      cell-size: 180
+      biomes: [dune_sea, red_mesa]
+      params: { height: 6 }
+
+  landmarks:
+    buried_temple:
+      type: temple
+      rarity: 0.0012
+      cell-size: 1000
+      min-distance: 750
+      biomes: [dune_sea, red_mesa]
+      max-slope: 5
+      announce: true
+      palette:
+        primary: CUT_SANDSTONE
+        secondary: CHISELED_SANDSTONE
+        accent: GOLD_BLOCK
+      params: { size: 14, steps: 4 }
+
+    bone_yard:
+      type: bones
+      rarity: 0.002
+      cell-size: 800
+      min-distance: 550
+      biomes: [dune_sea, salt_flat]
+      scale: 1.8
+      params: { radius: 16 }
+
+    collapsed_ruin:
+      type: ruin
+      rarity: 0.003
+      cell-size: 700
+      min-distance: 450
+      biomes: [red_mesa, rocky_desert]
+      palette:
+        primary: SANDSTONE
+        secondary: CUT_SANDSTONE
+        accent: ORANGE_TERRACOTTA
+      params: { width: 12, height: 7, pillars: 4 }
+
+decorations:
+  enabled: true
+  density: 1.0
+  types:
+    cactus_patch:
+      type: cactus
+      density: 5
+      on: [sand, red_sand]
+      params: { block: CACTUS, height: 3 }
+
+    dry_bush:
+      type: grass
+      density: 6
+      on: [sand, red_sand, gravel]
+      params: { block: DEAD_BUSH }
+
+    boulder:
+      type: rock
+      density: 2
+      on: [sand, gravel, red_sand]
+      scale: 1.3
+      params: { block: SANDSTONE, radius: 3 }
+
+    bone_scatter:
+      type: bones
+      density: 0.4
+      params: { block: BONE_BLOCK, radius: 4 }
+
+atmosphere:
+  sky-color: "#F5D6A0"
+  fog-color: "#E8B87A"
+  haze-density: 7
+  particles:
+    - { type: dust, density: 7, radius: 5, color: "#E8C88A" }
+  weather: clear
+  effects: {}
+  music:
+    tracks:
+      - "MUSIC_OVERWORLD_DESERT:220"
+      - "MUSIC_OVERWORLD_BADLANDS:240"
+
+features:
+  desert_plants: true
+  fossils: true
+  dinosaurs: false
+
+gameplay:
+  custom-mob-spawning: false
+  environmental-hazards: true

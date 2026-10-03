@@ -5,8 +5,10 @@ import me.foivos.planets.casino.CasinoFeedback;
 import me.foivos.planets.casino.CasinoGame;
 import me.foivos.planets.casino.CasinoManager;
 import me.foivos.planets.casino.CasinoScreenBase;
+import me.foivos.planets.casino.CasinoStakeDialog;
 import me.foivos.planets.casino.CasinoStats;
 import me.foivos.planets.casino.CasinoText;
+import me.foivos.planets.casino.CasinoWager;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Material;
@@ -41,6 +43,9 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class SlotsGame implements CasinoGame {
 
     static final String ID = "slots";
+
+    /** What a staked three-of-a-kind pays, per coin staked. */
+    static final int JACKPOT_MULTIPLIER = 8;
 
     /** The reels the machine ships with: a material, then its optional label. */
     private static final List<String> SHIPPED_SYMBOLS = List.of(
@@ -149,7 +154,7 @@ public final class SlotsGame implements CasinoGame {
     @Override
     public List<String> description() {
         return List.of("Three reels, one spin.",
-                "Line the symbols up for a prize.");
+                "&eStake coins&7 \u2014 three of a kind pays " + JACKPOT_MULTIPLIER + "\u00D7.");
     }
 
     @Override
@@ -162,6 +167,7 @@ public final class SlotsGame implements CasinoGame {
 
         /** Where the three reels sit — one line across the middle of the field. */
         private static final int[] REEL_SLOTS = {19, 22, 25};
+        private static final int STAKE_SLOT = 13;
         private static final int SPIN_SLOT = 31;
         private static final int RESULT_SLOT = 40;
         private static final int BACK_SLOT = 45;
@@ -183,6 +189,8 @@ public final class SlotsGame implements CasinoGame {
         private int stopped;
         private String result = "";
         private NamedTextColor resultColour = NamedTextColor.GRAY;
+        /** What the player puts on each spin; 0 is the free round. */
+        private double stake = 0;
 
         Screen(CasinoManager casino, Player viewer, List<Symbol> symbols, int steps,
                long stepTicks, int matchesToWin) {
@@ -203,13 +211,20 @@ public final class SlotsGame implements CasinoGame {
             inventory().clear();
             MenuStyle.decorate(inventory(), "\uD83C\uDFB0 Slots",
                     "\uD83C\uDFAF " + (matchesToWin == 3 ? "Three" : "Two") + " in a line");
+            Player player = viewer();
             inventory().setItem(4, MenuStyle.header("Slots", NamedTextColor.GOLD,
                     List.of(symbols.size() + " symbols \u00B7 "
                                     + (matchesToWin == 3 ? "three" : "two") + " in a line wins",
-                            "Free to play \u00B7 cosmetic prizes only")));
+                            stake > 0
+                                    ? "Stake: " + CasinoWager.money(stake) + " coins \u00B7 three of a kind pays "
+                                            + CasinoWager.money(stake * JACKPOT_MULTIPLIER)
+                                    : "Free to play \u00B7 set a stake to bet")));
 
             for (int reel = 0; reel < REEL_SLOTS.length; reel++) {
                 inventory().setItem(REEL_SLOTS[reel], reelItem(reel));
+            }
+            if (player != null) {
+                inventory().setItem(STAKE_SLOT, stakeItem(player));
             }
             inventory().setItem(SPIN_SLOT, spinButton());
             if (!result.isEmpty()) {
@@ -237,11 +252,44 @@ public final class SlotsGame implements CasinoGame {
             List<String> lore = new ArrayList<>();
             lore.add(symbols.size() + " symbols \u00B7 "
                     + (matchesToWin == 3 ? "three of a kind wins" : "a pair wins"));
-            lore.add("A spin costs nothing");
+            lore.add(stake > 0
+                    ? "This spin risks " + CasinoWager.money(stake) + " coins"
+                    : "A spin costs nothing");
             lore.add("");
             lore.add(animating() ? "The reels are turning\u2026" : "Click to spin");
             return button(Material.SLIME_BALL, "\uD83C\uDFB0 Spin the reels",
                     lore.toArray(new String[0]));
+        }
+
+        /** The stake button: what is on the next spin, and the dialog opener. */
+        private ItemStack stakeItem(Player player) {
+            List<Component> lore = new ArrayList<>();
+            lore.add(grey(stake > 0
+                    ? "Each spin risks " + CasinoWager.money(stake) + " coins"
+                    : "The spin is free \u2014 nothing staked"));
+            lore.add(grey("Three of a kind pays "
+                    + CasinoWager.money(stake * JACKPOT_MULTIPLIER) + " coins"));
+            lore.add(grey("A pair returns the stake"));
+            lore.add(plain(""));
+            lore.add(plain("Click to change the stake").color(NamedTextColor.YELLOW));
+            return item(stake > 0 ? Material.GOLD_BLOCK : Material.SUNFLOWER,
+                    plain("\uD83D\uDCB0 " + (stake > 0
+                            ? CasinoWager.money(stake) + " coins" : "No stake"))
+                            .color(stake > 0 ? NamedTextColor.GOLD : NamedTextColor.AQUA),
+                    lore);
+        }
+
+        /** Opens the stake dialog; the pick lands back on this screen. */
+        private void chooseStake(Player player) {
+            new CasinoStakeDialog(casino(), player,
+                    CasinoText.legacy("&8\uD83C\uDFB0 Slots \u2014 stake", NamedTextColor.DARK_AQUA),
+                    chosen -> {
+                        stake = chosen;
+                        Player back = viewer();
+                        if (back != null) {
+                            open(back);
+                        }
+                    }).open(player);
         }
 
         private ItemStack recordItem() {
@@ -268,6 +316,7 @@ public final class SlotsGame implements CasinoGame {
                     casino().openHub(player);
                 }
                 case SPIN_SLOT -> spin(player);
+                case STAKE_SLOT -> chooseStake(player);
                 default -> {
                     // The frame and the read-outs do nothing.
                 }
@@ -282,6 +331,16 @@ public final class SlotsGame implements CasinoGame {
             }
             if (!casino().begin(player, ID)) {
                 return;
+            }
+            // The stake leaves the balance only when the reels actually turn.
+            if (stake > 0) {
+                if (!casino().wager().canAfford(player, stake)
+                        || !casino().wager().take(player, stake)) {
+                    casino().notice(player, "not-enough",
+                            "&cYou need &e%amount%&c coins for that spin.",
+                            "%amount%", CasinoWager.money(stake));
+                    return;
+                }
             }
             CasinoFeedback.click(player);
             result = "";
@@ -335,14 +394,37 @@ public final class SlotsGame implements CasinoGame {
                 casino().win(player, ID);
                 CasinoFeedback.win(player);
                 casino().grant(player, ID);
+                if (stake > 0) {
+                    double payout = stake * JACKPOT_MULTIPLIER;
+                    if (casino().wager().give(player, payout)) {
+                        casino().notice(player, "jackpot",
+                                "&a&lThree of a kind! &e%amount%&a&l coins paid out!",
+                                "%amount%", CasinoWager.money(payout));
+                    } else {
+                        casino().notice(player, "payout-failed",
+                                "&cYour win of &e%amount%&c could not be paid \u2014 tell staff.",
+                                "%amount%", CasinoWager.money(payout));
+                    }
+                }
             } else if (drawn) {
                 // Two of three: the round was played to the end, but it did not
-                // reach the line the machine pays on.
+                // reach the line the machine pays on. A staked pair is a push —
+                // the stake comes back, so the spin cost nothing.
                 casino().draw(player, ID);
                 CasinoFeedback.click(player);
+                if (stake > 0 && casino().wager().give(player, stake)) {
+                    casino().notice(player, "push",
+                            "&eA pair \u2014 your stake of &f%amount%&e was returned.",
+                            "%amount%", CasinoWager.money(stake));
+                }
             } else {
                 casino().lose(player, ID);
                 CasinoFeedback.lose(player);
+                if (stake > 0) {
+                    casino().notice(player, "stake-lost",
+                            "&cNothing lined up \u2014 your stake of &e%amount%&c is gone.",
+                            "%amount%", CasinoWager.money(stake));
+                }
             }
 
             StringBuilder named = new StringBuilder();

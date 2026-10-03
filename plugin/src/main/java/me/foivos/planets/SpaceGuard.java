@@ -96,7 +96,10 @@ public final class SpaceGuard implements Listener {
         if (editors.contains(id)) {
             return space == null || !space.nearPad(where);
         }
-        return space != null && space.adminsCanBuild() && plugin.canUseAdmin(player);
+        // The config's build-anywhere switch is an op's convenience only: the
+        // platform is a public pad, so a trusted builder's planets.admin does
+        // not unlock it on its own.
+        return space != null && space.adminsCanBuild() && player.isOp();
     }
 
     /** Switches ship editing on or off for an admin ({@code /ship edit}). */

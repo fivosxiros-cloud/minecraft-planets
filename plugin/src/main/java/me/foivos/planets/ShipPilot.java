@@ -14,6 +14,7 @@ import org.bukkit.Sound;
 import org.bukkit.World;
 import org.bukkit.entity.Boat;
 import org.bukkit.entity.Player;
+import org.bukkit.scheduler.BukkitTask;
 import org.bukkit.util.Vector;
 
 import java.util.ArrayList;
@@ -78,6 +79,8 @@ final class ShipPilot {
      * interrupted docking leaves everyone in the air with the controls still theirs.
      */
     private final Map<UUID, String> landing = new ConcurrentHashMap<>();
+    /** Live find-trails, one per pilot, cancelled when the pilot lands or leaves. */
+    private final Map<UUID, BukkitTask> tasks = new ConcurrentHashMap<>();
 
     /** Counts flight ticks, so the engine hum keeps a slow beat. */
     private int engineTick;
@@ -848,8 +851,18 @@ final class ShipPilot {
      * Flies the boat: the pilot's input steers it, the config sets the pace, and
      * the hull turns to face the way the pilot is looking. The boat's movement
      * belongs to its first passenger, which is the invisible marker - so the
-     * plugin's own velocity is what moves the ship, at the pace the config asks
-     * for rather than at a rowboat's own speed.
+     * plugin moves the ship itself, at the pace the config asks for rather than
+     * at a rowboat's own speed.
+     *
+     * <p>The ship is flown by <b>teleporting</b> it one step a tick, not by
+     * setting its velocity. A boat's own physics multiply every velocity it is
+     * handed (its ground friction does not care that it is flying), so a
+     * velocity-driven ship stuttered along at the client — fast, slow, fast —
+     * exactly frame by frame, and its hull snapped rather than turned. A
+     * teleport lands exactly where it should every tick, and with the boat's
+     * teleport duration at one tick ({@code setTeleportDuration(1)}, set in
+     * {@link ShipModel}) the client interpolates the step, which reads as one
+     * smooth glide: exact speed, instant turning, no physics fighting back.
      */
     private void fly(Player player, Boat boat) {
         if (landing.containsKey(player.getUniqueId())) {
@@ -863,11 +876,18 @@ final class ShipPilot {
         // The pilot's own flight keeps the same pace, for the moment they step off.
         player.setFlySpeed((float) speed);
         Vector wish = wish(player, input);
-        if (wish.lengthSquared() > 0) {
-            wish.normalize().multiply(speed * SPEED_SCALE);
+        Location next;
+        if (wish.lengthSquared() == 0) {
+            // No keys held: the ship holds where it is (without gravity there
+            // is nothing pulling it, and zeroing the velocity keeps it true).
+            next = boat.getLocation();
+        } else {
+            next = boat.getLocation().add(wish.normalize().multiply(speed * SPEED_SCALE));
         }
-        boat.setRotation(player.getLocation().getYaw(), 0f);
-        boat.setVelocity(wish);
+        next.setYaw(player.getLocation().getYaw()); // the hull always faces the pilot's view
+        next.setPitch(0f);
+        boat.setVelocity(new Vector()); // the physics engine stays out of the way
+        boat.teleport(next);
     }
 
     /** The direction the pilot is asking for, from the keys they are holding. */
@@ -1012,6 +1032,141 @@ final class ShipPilot {
                 }
             }, grace);
         }, 20L);
+    }
+
+    /**
+     * Points a pilot at a planet's pad. Chat says which way it is and how far,
+     * and a line of particles draws the route for the next ten seconds, so a
+     * pad on the far side of the sky is findable without guessing. With no
+     * name given, every pad is listed with its distance instead.
+     *
+     * @return true when a pad was named and the trail is drawn
+     */
+    boolean find(Player player, String query) {
+        if (!isPiloting(player)) {
+            player.sendMessage(Component.text("You aren't flying - ").color(NamedTextColor.GRAY)
+                    .append(Component.text("/ship fly").color(NamedTextColor.AQUA))
+                    .append(Component.text(" takes off first.").color(NamedTextColor.GRAY)));
+            return false;
+        }
+        List<SpaceWorld.Pad> pads = space.pads();
+        if (pads.isEmpty()) {
+            player.sendMessage(Component.text("There are no planets to find yet.")
+                    .color(NamedTextColor.RED));
+            return false;
+        }
+        if (query == null || query.isBlank()) {
+            player.sendMessage(Component.text("\uD83E\uDDED Planets in the sky:").color(NamedTextColor.AQUA));
+            List<SpaceWorld.Pad> sorted = new ArrayList<>(pads);
+            Location here = player.getLocation();
+            sorted.sort(java.util.Comparator.comparingDouble(pad ->
+                    pad.center().distanceSquared(here)));
+            for (SpaceWorld.Pad pad : sorted) {
+                double distance = pad.center().distance(here);
+                player.sendMessage(Component.text("  \u2022 ").color(NamedTextColor.GRAY)
+                        .append(Component.text(pad.label()).color(NamedTextColor.YELLOW))
+                        .append(Component.text("  " + Math.round(distance) + "m")
+                                .color(NamedTextColor.GRAY)));
+            }
+            player.sendMessage(Component.text("Aim one with ").color(NamedTextColor.GRAY)
+                    .append(Component.text("/ship find <name>").color(NamedTextColor.AQUA))
+                    .append(Component.text(" for a marked route.").color(NamedTextColor.GRAY)));
+            return false;
+        }
+        SpaceWorld.Pad pad = matchingPad(pads, query);
+        if (pad == null) {
+            player.sendMessage(Component.text("No planet called '").color(NamedTextColor.RED)
+                    .append(Component.text(query).color(NamedTextColor.YELLOW))
+                    .append(Component.text("' is in the sky. ").color(NamedTextColor.RED))
+                    .append(Component.text("/ship find").color(NamedTextColor.AQUA))
+                    .append(Component.text(" lists them all.").color(NamedTextColor.GRAY)));
+            return false;
+        }
+        Location here = player.getLocation();
+        Location target = pad.center();
+        double distance = here.distance(target);
+        player.sendMessage(Component.text("\uD83E\uDDED ").color(NamedTextColor.AQUA)
+                .append(Component.text(pad.label()).color(NamedTextColor.YELLOW))
+                .append(Component.text(" is ").color(NamedTextColor.GRAY))
+                .append(Component.text(Math.round(distance) + "m").color(NamedTextColor.AQUA))
+                .append(Component.text(" away, ").color(NamedTextColor.GRAY))
+                .append(Component.text(relativeDirection(here, target)).color(NamedTextColor.YELLOW))
+                .append(Component.text(" — follow the trail.").color(NamedTextColor.GRAY)));
+        player.playSound(player.getLocation(), Sound.BLOCK_NOTE_BLOCK_CHIME, 0.8f, 1.6f);
+        drawTrail(player, target);
+        return true;
+    }
+
+    /** The pad whose label or world name starts with the query, ignoring case. */
+    private static SpaceWorld.Pad matchingPad(List<SpaceWorld.Pad> pads, String query) {
+        String wanted = query.trim().toLowerCase(Locale.ROOT);
+        SpaceWorld.Pad prefix = null;
+        for (SpaceWorld.Pad pad : pads) {
+            String label = pad.label().toLowerCase(Locale.ROOT);
+            String key = pad.worldKey().toLowerCase(Locale.ROOT);
+            if (label.equals(wanted) || key.equals(wanted)) {
+                return pad;
+            }
+            if ((label.startsWith(wanted) || key.startsWith(wanted)) && prefix == null) {
+                prefix = pad;
+            }
+        }
+        return prefix;
+    }
+
+    /** Where the pad sits relative to where the pilot is looking, in eighths. */
+    private static String relativeDirection(Location from, Location to) {
+        double yawToTarget = Math.toDegrees(Math.atan2(
+                -(to.getX() - from.getX()), to.getZ() - from.getZ()));
+        double relative = Math.floorMod(Math.round((yawToTarget - from.getYaw()) / 45.0), 8);
+        return switch ((int) relative) {
+            case 0 -> "straight ahead";
+            case 1 -> "ahead, to your left";
+            case 2 -> "to your left";
+            case 3 -> "behind, to your left";
+            case 4 -> "behind you";
+            case 5 -> "behind, to your right";
+            case 6 -> "to your right";
+            default -> "ahead, to your right";
+        };
+    }
+
+    /**
+     * Draws a line of end-rod particles from the pilot to a pad, for the next
+     * ten seconds or until they land — the route, marked in the sky.
+     */
+    private void drawTrail(Player player, Location target) {
+        UUID id = player.getUniqueId();
+        int[] ticks = {0};
+        BukkitTask task = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+            Player pilot = Bukkit.getPlayer(id);
+            if (pilot == null || !pilot.isOnline()
+                    || !space.isSpaceWorld(pilot.getWorld())
+                    || ticks[0] >= 100) {
+                tasks.remove(id);
+                return;
+            }
+            ticks[0]++;
+            Location from = pilot.getLocation().add(0, 1, 0);
+            Vector step = target.clone().toVector().subtract(from.toVector());
+            if (step.lengthSquared() < 1) {
+                return;
+            }
+            step.normalize().multiply(3);
+            Location mark = from.clone();
+            for (int i = 0; i < 20; i++) {
+                pilot.getWorld().spawnParticle(Particle.END_ROD, mark, 1, 0, 0, 0, 0);
+                mark = mark.add(step);
+                if (!mark.getWorld().equals(target.getWorld())
+                        || mark.distanceSquared(target) < 9) {
+                    break;
+                }
+            }
+        }, 1L, 2L);
+        BukkitTask old = tasks.put(id, task);
+        if (old != null) {
+            old.cancel();
+        }
     }
 
     /** How many players are flying right now. */

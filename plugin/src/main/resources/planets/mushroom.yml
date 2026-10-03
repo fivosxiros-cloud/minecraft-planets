@@ -1,0 +1,282 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  MUSHROOM — a fungal world: soft ground, giant mushrooms, spore-lit air.
+#
+#  Rolling humid hills covered in mycelium, mushroom forests of every size,
+#  and caverns where the glowshrooms take over.
+# ══════════════════════════════════════════════════════════════════════════════
+
+id: mushroom
+display-name: "Mushroom"
+description: "A humid fungal wilderness where everything glows a little."
+icon: MUSHROOM_STEW
+style: natural
+seed: random
+
+palette:
+  stone: STONE
+  dirt: MYCELIUM
+  grass: MUSHROOM_STEM
+  sand: RED_SAND
+  gravel: GRAVEL
+  ice: PACKED_ICE
+  lava: LAVA
+  deepslate: DEEPSLATE
+  cap_red: RED_MUSHROOM_BLOCK
+  cap_brown: BROWN_MUSHROOM_BLOCK
+  stem: MUSHROOM_STEM
+
+terrain:
+  height:
+    base: 70
+    min: 28
+    max: 200
+  sea-level: 62
+  liquid: water
+
+  horizontal-scale: 1.15
+  vertical-scale: 0.9
+
+  layers:
+    continentalness:
+      type: perlin
+      scale: 640
+      amplitude: 24
+      octaves: 3
+    erosion:
+      type: perlin
+      scale: 250
+      amplitude: 12
+      octaves: 4
+    weirdness:
+      type: perlin
+      scale: 175
+      amplitude: 9
+      octaves: 3
+
+  mountains:
+    enabled: true
+    strength: 38
+    scale: 400
+    width: 280
+    sharpness: 0.5
+  valleys:
+    enabled: true
+    strength: 14
+    scale: 300
+    width: 220
+    sharpness: 0.2
+  canyons:
+    enabled: false
+  cliffs:
+    enabled: true
+    strength: 5
+    width: 4
+    scale: 210
+    sharpness: 0.5
+  plateaus:
+    enabled: true
+    strength: 16
+    scale: 420
+    width: 64
+    sharpness: 0.35
+
+  detail-strength: 3.5
+  detail-frequency: 0.026
+  distortion-strength: 13
+  distortion-frequency: 0.0021
+
+  islands:
+    enabled: false
+
+surface:
+  layers:
+    - { block: MYCELIUM, depth: 2 }
+    - { block: DIRT, depth: 4 }
+    - { block: STONE, depth: 24 }
+    - { block: DEEPSLATE, depth: 999 }
+
+biomes:
+  fungal_forest:
+    biome: dark_forest
+    priority: 0
+    temperature: { min: 0.4, max: 1.0 }
+    humidity: { min: 0.5, max: 1.0 }
+    surface:
+      - { block: MYCELIUM, depth: 3 }
+      - { block: DIRT, depth: 5 }
+      - { block: STONE, depth: 24 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 1.8 }
+    structures: { density: 1.2 }
+    decorations: [giant_mushroom_red, giant_mushroom_brown, spore_grass, mushroom_cluster]
+
+  spore_marsh:
+    biome: swamp
+    priority: 1
+    temperature: { min: 0.5, max: 0.95 }
+    humidity: { min: 0.7, max: 1.0 }
+    altitude: { max: 66 }
+    surface:
+      - { block: MYCELIUM, depth: 2 }
+      - { block: CLAY, depth: 3 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 1.4 }
+    decorations: [mushroom_cluster, spore_grass, glow_patch]
+
+  fungal_hills:
+    biome: taiga
+    priority: 2
+    temperature: { min: 0.15, max: 0.6 }
+    humidity: { min: 0.3, max: 1.0 }
+    altitude: { min: 95 }
+    vegetation: { density: 1.0 }
+    decorations: [giant_mushroom_brown, mushroom_cluster, spore_grass]
+
+  barren_ring:
+    biome: plains
+    priority: 3
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 0.4 }
+    surface:
+      - { block: COARSE_DIRT, depth: 2 }
+      - { block: DIRT, depth: 4 }
+      - { block: STONE, depth: 22 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.3 }
+    decorations: [mushroom_cluster, glow_patch]
+
+caves:
+  enabled: true
+  tunnels:
+    enabled: true
+    density: 0.5
+    scale: 100
+    size: 1.0
+    min-y: 12
+    max-y: 72
+  caverns:
+    enabled: true
+    density: 0.11
+    scale: 210
+    size: 1.8
+    min-y: 10
+    max-y: 60
+  underground-lakes: true
+
+structures:
+  enabled: true
+  density: 1.0
+  max-per-chunk: 2
+  min-distance: 130
+
+  types:
+    mushroom_grove:
+      type: mushroom-cluster
+      rarity: 0.03
+      cell-size: 140
+      biomes: [fungal_forest, spore_marsh, fungal_hills]
+      params: { count: 6, height: 9 }
+
+    old_camp:
+      type: campsite
+      rarity: 0.008
+      cell-size: 240
+      biomes: [fungal_forest, fungal_hills]
+      max-slope: 3
+      params: { tents: 2, campfire: true }
+
+  landmarks:
+    titan_cap:
+      type: giant-tree
+      rarity: 0.004
+      cell-size: 600
+      min-distance: 400
+      biomes: [fungal_forest]
+      announce: true
+      scale: 1.6
+      params: { height: 38, radius: 13, branches: 5 }
+
+    spore_cathedral:
+      type: temple
+      rarity: 0.0012
+      cell-size: 1050
+      min-distance: 780
+      biomes: [fungal_forest, spore_marsh]
+      announce: true
+      palette:
+        primary: MYCELIUM
+        secondary: MUSHROOM_STEM
+        accent: RED_MUSHROOM_BLOCK
+      params: { size: 13, steps: 4 }
+
+decorations:
+  enabled: true
+  density: 1.4
+  types:
+    giant_mushroom_red:
+      type: tree
+      density: 3.5
+      biomes: [fungal_forest, spore_marsh]
+      on: [mycelium, dirt, clay]
+      max-slope: 3
+      params:
+        trunk: MUSHROOM_STEM
+        leaves: RED_MUSHROOM_BLOCK
+        height: 7
+        canopy-radius: 3
+        canopy: flat
+
+    giant_mushroom_brown:
+      type: tree
+      density: 3
+      biomes: [fungal_forest, fungal_hills]
+      on: [mycelium, dirt]
+      max-slope: 3
+      params:
+        trunk: MUSHROOM_STEM
+        leaves: BROWN_MUSHROOM_BLOCK
+        height: 6
+        canopy-radius: 3
+        canopy: flat
+
+    mushroom_cluster:
+      type: mushroom
+      density: 10
+      on: [mycelium, dirt, coarse_dirt, clay]
+      params: { blocks: RED_MUSHROOM,BROWN_MUSHROOM }
+
+    spore_grass:
+      type: grass
+      density: 30
+      on: [mycelium, dirt]
+      params: { block: SHORT_GRASS, height: 1 }
+
+    glow_patch:
+      type: lichen
+      density: 6
+      on: [mycelium, dirt, stone]
+      params: { block: GLOWSTONE, radius: 2 }
+
+atmosphere:
+  sky-color: "#9FB8C8"
+  fog-color: "#8FA8B8"
+  haze-density: 8
+  particles:
+    - { type: spores, density: 9, radius: 4, min-height: 0.5, max-height: 4.0 }
+    - { type: dust, density: 4, radius: 4, color: "#C8A8D8" }
+  weather: rain
+  effects: {}
+  music:
+    tracks:
+      - "MUSIC_OVERWORLD_JUNGLE:250"
+      - "MUSIC_OVERWORLD_SWAMP:230"
+
+features:
+  fungal_flora: true
+  spore_particles: true
+  dinosaurs: false
+
+gameplay:
+  custom-mob-spawning: false
+  environmental-hazards: false

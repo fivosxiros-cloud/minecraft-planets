@@ -1,0 +1,284 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  OCEAN — mostly water, with islands scattered across it.
+#
+#  The terrain is deliberately shallow and wide, and the island system adds
+#  circular humps with a falloff, so the land arrives as real islands with
+#  shelves rather than as peaks poking out of the sea.
+# ══════════════════════════════════════════════════════════════════════════════
+
+id: ocean
+display-name: "Ocean"
+description: "A world of warm shallows and scattered islands."
+icon: WATER_BUCKET
+style: ocean_world
+seed: random
+
+palette:
+  stone: STONE
+  deepslate: DEEPSLATE
+  dirt: DIRT
+  grass: GRASS_BLOCK
+  sand: SAND
+  gravel: GRAVEL
+  ice: PACKED_ICE
+  coral: TUBE_CORAL_BLOCK
+  lava: LAVA
+
+terrain:
+  height:
+    base: 46
+    min: 18
+    max: 150
+  sea-level: 64
+  liquid: water
+
+  horizontal-scale: 1.25
+  vertical-scale: 0.85
+
+  layers:
+    continentalness:
+      type: perlin
+      scale: 760
+      amplitude: 16
+      octaves: 3
+    erosion:
+      type: perlin
+      scale: 340
+      amplitude: 10
+      octaves: 3
+    weirdness:
+      type: perlin
+      scale: 180
+      amplitude: 6
+      octaves: 2
+
+  mountains:
+    enabled: false
+  valleys:
+    enabled: true
+    strength: 8
+    scale: 320
+    width: 220
+    sharpness: 0.2
+  canyons:
+    enabled: true
+    strength: 24
+    scale: 240
+    width: 0.45
+    sharpness: 0.7
+  cliffs:
+    enabled: false
+  plateaus:
+    enabled: false
+
+  # Islands: frequency is how often one appears, size is its radius in blocks,
+  # height is how far it rises above the sea, falloff how quickly it shelves.
+  islands:
+    enabled: true
+    frequency: 0.0018
+    size: 120
+    height: 34
+    falloff: 0.55
+
+  detail-strength: 3
+  detail-frequency: 0.03
+  distortion-strength: 12
+  distortion-frequency: 0.0018
+
+surface:
+  layers:
+    - { block: SAND, depth: 3 }
+    - { block: GRAVEL, depth: 3 }
+    - { block: STONE, depth: 24 }
+    - { block: DEEPSLATE, depth: 999 }
+
+biomes:
+  shallow_sea:
+    biome: warm_ocean
+    priority: 0
+    temperature: { min: 0.4, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { max: 64 }
+    surface:
+      - { block: SAND, depth: 4 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.0 }
+    decorations: [coral_clump, sea_rock]
+
+  deep_sea:
+    biome: deep_ocean
+    priority: 1
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { max: 40 }
+    surface:
+      - { block: GRAVEL, depth: 3 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.0 }
+    decorations: [sea_rock]
+
+  island_beach:
+    biome: beach
+    priority: 4
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { min: 64, max: 70 }
+    surface:
+      - { block: SAND, depth: 5 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.2 }
+    decorations: [palm, sea_rock]
+
+  palm_island:
+    biome: jungle
+    priority: 3
+    temperature: { min: 0.5, max: 1.0 }
+    humidity: { min: 0.4, max: 1.0 }
+    altitude: { min: 70 }
+    vegetation: { density: 1.4 }
+    decorations: [palm, jungle_bush, sea_rock]
+
+  rocky_island:
+    biome: stony_shore
+    priority: 3
+    temperature: { min: 0.0, max: 0.5 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { min: 70 }
+    vegetation: { density: 0.4 }
+    decorations: [sea_rock, palm]
+
+caves:
+  enabled: true
+  tunnels:
+    enabled: true
+    density: 0.45
+    scale: 110
+    size: 1.0
+    min-y: 14
+    max-y: 60
+  caverns:
+    enabled: true
+    density: 0.07
+    scale: 210
+    size: 1.8
+    min-y: 12
+    max-y: 46
+  underground-lakes: true
+
+structures:
+  enabled: true
+  density: 1.0
+  max-per-chunk: 1
+  min-distance: 160
+
+  types:
+    sunken_ruin:
+      type: ruin
+      rarity: 0.02
+      cell-size: 220
+      biomes: [shallow_sea, deep_sea]
+      max-slope: 12
+      palette:
+        primary: PRISMARINE_BRICKS
+        secondary: DARK_PRISMARINE
+        accent: SEA_LANTERN
+      params: { width: 11, height: 6, pillars: 4 }
+
+    lighthouse:
+      type: tower
+      rarity: 0.008
+      cell-size: 300
+      biomes: [island_beach, rocky_island, palm_island]
+      max-slope: 4
+      palette:
+        primary: SMOOTH_QUARTZ
+        accent: RED_CONCRETE
+        light: SEA_LANTERN
+      params: { height: 20, base-width: 4 }
+
+  landmarks:
+    drowned_temple:
+      type: temple
+      rarity: 0.0015
+      cell-size: 1000
+      min-distance: 700
+      biomes: [deep_sea, shallow_sea]
+      announce: true
+      scale: 1.5
+      palette:
+        primary: PRISMARINE_BRICKS
+        secondary: DARK_PRISMARINE
+        accent: SEA_LANTERN
+      params: { size: 16, steps: 4 }
+
+    kraken_bones:
+      type: bones
+      rarity: 0.002
+      cell-size: 900
+      min-distance: 600
+      biomes: [deep_sea, shallow_sea]
+      announce: true
+      scale: 2.4
+      params: { radius: 22 }
+
+decorations:
+  enabled: true
+  density: 1.0
+  types:
+    coral_clump:
+      type: lichen
+      density: 8
+      biomes: [shallow_sea]
+      on: [sand, gravel, stone]
+      params: { block: TUBE_CORAL_BLOCK, radius: 3 }
+
+    sea_rock:
+      type: rock
+      density: 4
+      on: [sand, gravel, stone]
+      params: { block: PRISMARINE, radius: 2 }
+
+    palm:
+      type: tree
+      density: 4
+      biomes: [palm_island, island_beach]
+      on: [sand, grass_block]
+      max-slope: 3
+      params:
+        trunk: JUNGLE_LOG
+        leaves: JUNGLE_LEAVES
+        height: 8
+        canopy-radius: 3
+        canopy: flat
+
+    jungle_bush:
+      type: bush
+      density: 10
+      biomes: [palm_island]
+      on: [grass_block]
+      params: { radius: 2, height: 3, trunk: JUNGLE_LOG, leaves: JUNGLE_LEAVES }
+
+atmosphere:
+  sky-color: "#3FA9F5"
+  fog-color: "#1E5FA8"
+  water-color: "#2E8BC0"
+  haze-density: 6
+  particles:
+    - { type: bubbles, density: 8, radius: 4 }
+  weather: clear
+  effects:
+    swim: 1
+    breath: 1
+  music:
+    tracks:
+      - "MUSIC_UNDER_WATER:140"
+      - "MUSIC_OVERWORLD_OCEAN:240"
+
+features:
+  coral_reefs: true
+
+gameplay:
+  custom-mob-spawning: false

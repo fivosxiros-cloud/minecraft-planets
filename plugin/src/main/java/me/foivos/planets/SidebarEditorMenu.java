@@ -227,7 +227,11 @@ public final class SidebarEditorMenu implements InventoryHolder {
 
     /** One line of the player's sidebar, previewing exactly what it renders. */
     private ItemStack shownItem(SidebarScoreboard.Line line, int index, int total) {
-        ItemStack item = new ItemStack(Material.OAK_SIGN);
+        // The separator is not a number like the rest, so it is not drawn as an
+        // ordinary sign either: a crimson sign reads as a different kind of row
+        // at a glance, matching the rule it draws on the board itself.
+        ItemStack item = new ItemStack(line.id().startsWith("separator")
+                ? Material.CRIMSON_SIGN : Material.OAK_SIGN);
         ItemMeta meta = item.getItemMeta();
         // The preview is built the same way the sidebar itself builds the row,
         // so the colours on the item are the colours on the screen — except for

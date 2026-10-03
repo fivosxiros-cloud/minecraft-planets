@@ -1,0 +1,297 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  FROZEN — a whole planet below zero.
+#
+#  Everything here is a demonstration of how far a planet can be re-themed from
+#  one palette: the terrain shape is a normal natural world, but the surface, the
+#  biome rules, the growth and the atmosphere all say "ice".
+# ══════════════════════════════════════════════════════════════════════════════
+
+id: frozen
+display-name: "Frozen"
+description: "Glacier fields, blue ice spires and a wind that never stops."
+icon: BLUE_ICE
+style: natural
+seed: random
+
+palette:
+  stone: STONE
+  deepslate: DEEPSLATE
+  dirt: SNOW_BLOCK
+  grass: SNOW_BLOCK
+  sand: SNOW_BLOCK
+  gravel: GRAVEL
+  ice: PACKED_ICE
+  snow: SNOW_BLOCK
+  blue_ice: BLUE_ICE
+  lava: LAVA
+
+terrain:
+  height:
+    base: 78
+    min: 30
+    max: 240
+  sea-level: 58
+  liquid: water
+
+  horizontal-scale: 1.0
+  vertical-scale: 1.05
+
+  layers:
+    continentalness:
+      type: perlin
+      scale: 600
+      amplitude: 28
+      octaves: 3
+    erosion:
+      type: billow
+      scale: 280
+      amplitude: 18
+      octaves: 3
+    weirdness:
+      type: perlin
+      scale: 160
+      amplitude: 8
+      octaves: 3
+
+  mountains:
+    enabled: true
+    strength: 52
+    scale: 340
+    width: 220
+    sharpness: 0.7
+  valleys:
+    enabled: true
+    strength: 14
+    scale: 300
+    width: 200
+    sharpness: 0.2
+  canyons:
+    enabled: true
+    strength: 22
+    scale: 240
+    width: 0.4
+    sharpness: 0.6
+  cliffs:
+    enabled: true
+    strength: 10
+    width: 6
+    scale: 170
+    sharpness: 0.65
+  plateaus:
+    enabled: true
+    strength: 16
+    scale: 400
+    width: 70
+    sharpness: 0.3
+  detail-strength: 3
+  detail-frequency: 0.024
+  distortion-strength: 16
+  distortion-frequency: 0.002
+
+  islands:
+    enabled: false
+
+surface:
+  layers:
+    - { block: SNOW_BLOCK, depth: 4 }
+    - { block: PACKED_ICE, depth: 3 }
+    - { block: STONE, depth: 22 }
+    - { block: DEEPSLATE, depth: 999 }
+
+biomes:
+  glacier_plains:
+    biome: snowy_plains
+    priority: 0
+    temperature: { min: 0.0, max: 0.4 }
+    humidity: { min: 0.0, max: 1.0 }
+    vegetation: { density: 0.08 }
+    decorations: [ice_shard, snow_drift]
+
+  frozen_forest:
+    biome: snowy_taiga
+    priority: 2
+    temperature: { min: 0.0, max: 0.35 }
+    humidity: { min: 0.45, max: 1.0 }
+    vegetation: { density: 1.2 }
+    decorations: [frosted_tree, ice_shard, snow_drift]
+
+  frozen_ocean:
+    biome: frozen_ocean
+    priority: 3
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { max: 58 }
+    surface:
+      - { block: PACKED_ICE, depth: 2 }
+      - { block: BLUE_ICE, depth: 3 }
+      - { block: STONE, depth: 18 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.0 }
+    decorations: []
+
+  blue_ice_shore:
+    biome: snowy_beach
+    priority: 4
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { min: 58, max: 65 }
+    surface:
+      - { block: BLUE_ICE, depth: 2 }
+      - { block: SNOW_BLOCK, depth: 2 }
+      - { block: STONE, depth: 18 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.0 }
+    decorations: [ice_shard]
+
+  frost_peaks:
+    biome: jagged_peaks
+    priority: 5
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { min: 150 }
+    surface:
+      - { block: BLUE_ICE, depth: 2 }
+      - { block: PACKED_ICE, depth: 4 }
+      - { block: STONE, depth: 18 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.0 }
+    structures: { density: 1.2 }
+    decorations: [ice_spire, ice_shard]
+
+caves:
+  enabled: true
+  tunnels:
+    enabled: true
+    density: 0.5
+    scale: 100
+    size: 1.0
+    min-y: 12
+    max-y: 80
+  caverns:
+    enabled: true
+    density: 0.08
+    scale: 200
+    size: 1.6
+    min-y: 10
+    max-y: 60
+  crystal-caves:
+    enabled: true
+    density: 0.06
+    scale: 220
+    size: 2.0
+    min-y: 10
+    max-y: 50
+    lining: PACKED_ICE
+    lining-depth: 1
+  underground-lakes: true
+
+structures:
+  enabled: true
+  density: 1.0
+  max-per-chunk: 2
+  min-distance: 130
+
+  types:
+    ice_spike_field:
+      type: ice-spike
+      rarity: 0.03
+      cell-size: 150
+      biomes: [glacier_plains, blue_ice_shore, frost_peaks]
+      max-slope: 6
+      params: { height: 14, count: 4 }
+
+    frozen_camp:
+      type: campsite
+      rarity: 0.01
+      cell-size: 220
+      biomes: [glacier_plains, frozen_forest]
+      max-slope: 3
+      params: { tents: 2, campfire: false }
+
+    ice_circle:
+      type: stone-circle
+      rarity: 0.008
+      cell-size: 260
+      biomes: [glacier_plains]
+      max-slope: 3
+      palette: { primary: BLUE_ICE }
+      params: { radius: 10, stones: 8 }
+
+  landmarks:
+    frozen_giant:
+      type: fossil
+      rarity: 0.0012
+      cell-size: 900
+      min-distance: 700
+      biomes: [glacier_plains, blue_ice_shore]
+      announce: true
+      scale: 1.3
+      params: { length: 26, height: 6, buried: false }
+
+    glacier_monolith:
+      type: monument
+      rarity: 0.001
+      cell-size: 1100
+      min-distance: 800
+      biomes: [frost_peaks, glacier_plains]
+      announce: true
+      palette:
+        primary: PACKED_ICE
+        accent: BLUE_ICE
+      params: { shape: obelisk, height: 30 }
+
+decorations:
+  enabled: true
+  density: 1.0
+  types:
+    snow_drift:
+      type: lichen
+      density: 10
+      on: [snow_block, packed_ice, stone]
+      params: { block: SNOW_BLOCK, radius: 3 }
+
+    ice_shard:
+      type: crystal
+      density: 4
+      on: [snow_block, packed_ice, blue_ice, stone]
+      params: { block: PACKED_ICE, tip: BLUE_ICE, height: 4, count: 3 }
+
+    ice_spire:
+      type: crystal
+      density: 1.4
+      biomes: [frost_peaks]
+      scale: 1.6
+      params: { block: BLUE_ICE, tip: PACKED_ICE, height: 9, count: 3 }
+
+    frosted_tree:
+      type: tree
+      density: 5
+      biomes: [frozen_forest]
+      on: [snow_block, dirt]
+      max-slope: 3
+      params:
+        trunk: SPRUCE_LOG
+        leaves: SPRUCE_LEAVES
+        height: 9
+        canopy-radius: 3
+        canopy: conical
+
+atmosphere:
+  sky-color: "#BFD8E8"
+  fog-color: "#E0F0FF"
+  haze-density: 8
+  particles:
+    - { type: snow, density: 14, radius: 6 }
+  weather: clear
+  precipitation: true
+  effects: {}
+  music:
+    tracks:
+      - "MUSIC_OVERWORLD_SNOWY_SLOPES:240"
+      - "MUSIC_OVERWORLD_GROVE:220"
+
+features:
+  ice_caverns: true
+
+gameplay:
+  environmental-hazards: false

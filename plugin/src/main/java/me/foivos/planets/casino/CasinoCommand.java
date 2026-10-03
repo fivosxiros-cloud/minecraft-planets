@@ -52,6 +52,9 @@ public final class CasinoCommand {
                 printHelp(sender);
                 return true;
             }
+            if (sub.equals("jointable") || sub.equals("join")) {
+                return joinTable(sender, args);
+            }
         }
         if (!(sender instanceof Player player)) {
             sender.sendMessage(Component.text("Only players can open the casino.")
@@ -68,6 +71,32 @@ public final class CasinoCommand {
         }
         player.closeInventory();
         casino.openHub(player);
+        return true;
+    }
+
+    /**
+     * {@code /casino jointable <host>} — the join button a rock-paper-scissors
+     * challenge arrives with, runnable by hand as well. Everything it does is
+     * checked at the table, so a stale invitation just says the table is gone.
+     */
+    private boolean joinTable(CommandSender sender, String[] args) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Component.text("Only players can join a table.")
+                    .color(NamedTextColor.RED));
+            return true;
+        }
+        if (!player.hasPermission(USE)) {
+            noPermission(player);
+            return true;
+        }
+        String host = args.length >= 2 ? args[1] : null;
+        if (host == null || host.isBlank()) {
+            player.sendMessage(Component.text("Join whose table? ").color(NamedTextColor.RED)
+                    .append(Component.text("/casino jointable <player>").color(NamedTextColor.YELLOW)));
+            return true;
+        }
+        player.closeInventory();
+        casino.joinRpsTable(player, host);
         return true;
     }
 
@@ -119,6 +148,7 @@ public final class CasinoCommand {
         line(sender, "/casino stats", "your rounds, streaks, prizes and achievements");
         line(sender, "/casino reload", "re-read the casino section of config.yml");
         line(sender, "/casino info", "what the games are and what they pay");
+        line(sender, "/casino jointable <player>", "join a rock-paper-scissors challenge");
         sender.sendMessage(Component.text("Every game is free and pays only in cosmetic prizes.")
                 .color(NamedTextColor.DARK_GRAY)
                 .decoration(TextDecoration.ITALIC, false));
@@ -144,6 +174,7 @@ public final class CasinoCommand {
             options.add("stats");
         }
         options.add("info");
+        options.add("jointable");
         String prefix = args.length == 0 ? "" : args[0].toLowerCase(Locale.ROOT);
         List<String> matches = new ArrayList<>();
         for (String option : options) {

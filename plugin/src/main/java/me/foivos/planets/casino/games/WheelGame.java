@@ -6,8 +6,10 @@ import me.foivos.planets.casino.CasinoGame;
 import me.foivos.planets.casino.CasinoManager;
 import me.foivos.planets.casino.CasinoReward;
 import me.foivos.planets.casino.CasinoScreenBase;
+import me.foivos.planets.casino.CasinoStakeDialog;
 import me.foivos.planets.casino.CasinoStats;
 import me.foivos.planets.casino.CasinoText;
+import me.foivos.planets.casino.CasinoWager;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Material;
@@ -43,6 +45,9 @@ import java.util.concurrent.ThreadLocalRandom;
 public final class WheelGame implements CasinoGame {
 
     static final String ID = "wheel";
+
+    /** What a staked spin pays on a prize section, per coin staked. */
+    static final double PRIZE_MULTIPLIER = 1.5;
 
     /**
      * The ring the sections are drawn in, clockwise from the top-left of the
@@ -181,7 +186,7 @@ public final class WheelGame implements CasinoGame {
     @Override
     public List<String> description() {
         return List.of("A wheel that spins and stops.",
-                "Where it lands is where it lands.");
+                "&eStake coins&7 \u2014 a prize section pays " + PRIZE_MULTIPLIER + "\u00D7.");
     }
 
     @Override
@@ -193,6 +198,7 @@ public final class WheelGame implements CasinoGame {
     private static final class Screen extends CasinoScreenBase {
 
         private static final int HUB_SLOT = 22;
+        private static final int STAKE_SLOT = 39;
         private static final int SPIN_SLOT = 40;
         private static final int BACK_SLOT = 45;
         private static final int RECORD_SLOT = 49;
@@ -209,6 +215,8 @@ public final class WheelGame implements CasinoGame {
         private Section landed;
         /** What the middle of the wheel says about the last spin. */
         private String outcome = "";
+        /** What the player puts on each spin; 0 is the free round. */
+        private double stake = 0;
 
         Screen(CasinoManager casino, Player viewer, List<Section> sections, int turns,
                long stepTicks) {
@@ -229,14 +237,21 @@ public final class WheelGame implements CasinoGame {
             inventory().clear();
             MenuStyle.decorate(inventory(), "\uD83C\uDFA1 Wheel",
                     "\uD83C\uDFAF " + payingSections() + " of " + sections.size() + " pay out");
+            Player player = viewer();
             inventory().setItem(4, MenuStyle.header("Wheel", NamedTextColor.GOLD,
                     List.of(sections.size() + " sections \u00B7 " + turns + " laps a spin",
-                            "Free to play \u00B7 cosmetic prizes only")));
+                            stake > 0
+                                    ? "Stake: " + CasinoWager.money(stake) + " coins \u00B7 a prize pays "
+                                            + CasinoWager.money(stake * PRIZE_MULTIPLIER)
+                                    : "Free to play \u00B7 set a stake to bet")));
 
             for (int place = 0; place < Math.min(sections.size(), RING.length); place++) {
                 inventory().setItem(RING[place], sectionItem(place, place == position));
             }
             inventory().setItem(HUB_SLOT, hubItem());
+            if (player != null) {
+                inventory().setItem(STAKE_SLOT, stakeItem(player));
+            }
             inventory().setItem(SPIN_SLOT, spinButton());
             inventory().setItem(BACK_SLOT, backButton("Casino"));
             inventory().setItem(RECORD_SLOT, recordItem());
@@ -305,10 +320,42 @@ public final class WheelGame implements CasinoGame {
         private ItemStack spinButton() {
             List<String> lore = new ArrayList<>();
             lore.add(sections.size() + " sections on the wheel");
-            lore.add("A spin costs nothing");
+            lore.add(stake > 0
+                    ? "This spin risks " + CasinoWager.money(stake) + " coins"
+                    : "A spin costs nothing");
             lore.add("");
             lore.add(animating() ? "The wheel is turning\u2026" : "Click to spin");
             return button(Material.COMPASS, "\uD83C\uDFA1 Spin the wheel", lore.toArray(new String[0]));
+        }
+
+        /** The stake button: what is on the next spin, and the dialog opener. */
+        private ItemStack stakeItem(Player player) {
+            List<Component> lore = new ArrayList<>();
+            lore.add(grey(stake > 0
+                    ? "Each spin risks " + CasinoWager.money(stake) + " coins"
+                    : "The spin is free \u2014 nothing staked"));
+            lore.add(grey("A prize section pays "
+                    + CasinoWager.money(stake * PRIZE_MULTIPLIER) + " coins"));
+            lore.add(plain(""));
+            lore.add(plain("Click to change the stake").color(NamedTextColor.YELLOW));
+            return item(stake > 0 ? Material.GOLD_BLOCK : Material.SUNFLOWER,
+                    plain("\uD83D\uDCB0 " + (stake > 0
+                            ? CasinoWager.money(stake) + " coins" : "No stake"))
+                            .color(stake > 0 ? NamedTextColor.GOLD : NamedTextColor.AQUA),
+                    lore);
+        }
+
+        /** Opens the stake dialog; the pick lands back on this screen. */
+        private void chooseStake(Player player) {
+            new CasinoStakeDialog(casino(), player,
+                    CasinoText.legacy("&8\uD83C\uDFA1 Wheel \u2014 stake", NamedTextColor.DARK_AQUA),
+                    chosen -> {
+                        stake = chosen;
+                        Player back = viewer();
+                        if (back != null) {
+                            open(back);
+                        }
+                    }).open(player);
         }
 
         private ItemStack recordItem() {
@@ -335,6 +382,7 @@ public final class WheelGame implements CasinoGame {
                     casino().openHub(player);
                 }
                 case SPIN_SLOT -> spin(player);
+                case STAKE_SLOT -> chooseStake(player);
                 default -> {
                     // The frame and the read-outs do nothing.
                 }
@@ -349,6 +397,16 @@ public final class WheelGame implements CasinoGame {
             }
             if (!casino().begin(player, ID)) {
                 return;
+            }
+            // The stake leaves the balance only when the wheel actually turns.
+            if (stake > 0) {
+                if (!casino().wager().canAfford(player, stake)
+                        || !casino().wager().take(player, stake)) {
+                    casino().notice(player, "not-enough",
+                            "&cYou need &e%amount%&c coins for that spin.",
+                            "%amount%", CasinoWager.money(stake));
+                    return;
+                }
             }
             CasinoFeedback.click(player);
             landed = null;
@@ -404,9 +462,26 @@ public final class WheelGame implements CasinoGame {
                 outcome = prize == null
                         ? "&7The prize pool is empty \u2014 nothing to give."
                         : "&aPays out: &f" + prize.name() + "&a.";
+                if (stake > 0) {
+                    double payout = stake * PRIZE_MULTIPLIER;
+                    if (casino().wager().give(player, payout)) {
+                        casino().notice(player, "stake-won",
+                                "&aThe wheel paid out &e%amount%&a coins.",
+                                "%amount%", CasinoWager.money(payout));
+                    } else {
+                        casino().notice(player, "payout-failed",
+                                "&cYour win of &e%amount%&c could not be paid \u2014 tell staff.",
+                                "%amount%", CasinoWager.money(payout));
+                    }
+                }
             } else {
                 casino().lose(player, ID);
                 CasinoFeedback.lose(player);
+                if (stake > 0) {
+                    casino().notice(player, "stake-lost",
+                            "&cThe wheel came up empty \u2014 your stake of &e%amount%&c is gone.",
+                            "%amount%", CasinoWager.money(stake));
+                }
                 outcome = "&cNothing this time.";
             }
             animating(false);

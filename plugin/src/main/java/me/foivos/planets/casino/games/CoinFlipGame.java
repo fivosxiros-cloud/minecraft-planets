@@ -5,8 +5,10 @@ import me.foivos.planets.casino.CasinoFeedback;
 import me.foivos.planets.casino.CasinoGame;
 import me.foivos.planets.casino.CasinoManager;
 import me.foivos.planets.casino.CasinoScreenBase;
+import me.foivos.planets.casino.CasinoStakeDialog;
 import me.foivos.planets.casino.CasinoStats;
 import me.foivos.planets.casino.CasinoText;
+import me.foivos.planets.casino.CasinoWager;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Material;
@@ -61,7 +63,8 @@ public final class CoinFlipGame implements CasinoGame {
 
     @Override
     public List<String> description() {
-        return List.of("Call it in the air.", "Heads or tails \u2014 nothing staked.");
+        return List.of("Call it in the air.",
+                "&eStake coins&7 on the call \u2014 a win pays double.");
     }
 
     @Override
@@ -76,6 +79,7 @@ public final class CoinFlipGame implements CasinoGame {
         private static final int COIN_SLOT = 22;
         private static final int TAILS_SLOT = 24;
         private static final int RESULT_SLOT = 31;
+        private static final int STAKE_SLOT = 40;
         private static final int BACK_SLOT = 45;
         private static final int RECORD_SLOT = 49;
         private static final int CLOSE_SLOT = 53;
@@ -85,6 +89,8 @@ public final class CoinFlipGame implements CasinoGame {
         /** The line under the coin once a round has landed. */
         private String result = "";
         private NamedTextColor resultColour = NamedTextColor.GRAY;
+        /** What the player puts on each call; 0 is the free round. */
+        private double stake = 0;
 
         Screen(CasinoManager casino, Player viewer) {
             super(casino.plugin(), casino, viewer, 54,
@@ -95,11 +101,19 @@ public final class CoinFlipGame implements CasinoGame {
         protected void render() {
             inventory().clear();
             MenuStyle.decorate(inventory(), "\uD83E\uDE99 Coin Flip", "\uD83C\uDFAF Your call");
+            Player player = viewer();
             inventory().setItem(4, MenuStyle.header("Coin Flip", NamedTextColor.GOLD,
-                    List.of("Call it in the air", "Free to play \u00B7 cosmetic prizes only")));
+                    List.of("Call it in the air",
+                            stake > 0
+                                    ? "Stake: " + CasinoWager.money(stake) + " coins \u00B7 a win pays "
+                                            + CasinoWager.money(stake * 2)
+                                    : "Free to play \u00B7 set a stake to bet")));
             inventory().setItem(HEADS_SLOT, callButton(true));
             inventory().setItem(TAILS_SLOT, callButton(false));
             inventory().setItem(COIN_SLOT, coinItem());
+            if (player != null) {
+                inventory().setItem(STAKE_SLOT, stakeItem(player));
+            }
             if (!result.isEmpty()) {
                 inventory().setItem(RESULT_SLOT, item(Material.PAPER,
                         CasinoText.legacy("&fThe coin", NamedTextColor.WHITE),
@@ -129,6 +143,35 @@ public final class CoinFlipGame implements CasinoGame {
                     lore);
         }
 
+        /** The stake button: what is on the next call, and the dialog opener. */
+        private ItemStack stakeItem(Player player) {
+            List<Component> lore = new ArrayList<>();
+            lore.add(grey(stake > 0
+                    ? "Each call risks " + CasinoWager.money(stake) + " coins"
+                    : "The round is free \u2014 nothing staked"));
+            lore.add(grey("A winning call pays " + CasinoWager.money(stake * 2) + " coins"));
+            lore.add(plain(""));
+            lore.add(plain("Click to change the stake").color(NamedTextColor.YELLOW));
+            return item(stake > 0 ? Material.GOLD_BLOCK : Material.SUNFLOWER,
+                    plain("\uD83D\uDCB0 " + (stake > 0
+                            ? CasinoWager.money(stake) + " coins" : "No stake"))
+                            .color(stake > 0 ? NamedTextColor.GOLD : NamedTextColor.AQUA),
+                    lore);
+        }
+
+        /** Opens the stake dialog; the pick lands back on this screen. */
+        private void chooseStake(Player player) {
+            new CasinoStakeDialog(casino(), player,
+                    CasinoText.legacy("&8\uD83E\uDE99 Coin Flip \u2014 stake", NamedTextColor.DARK_AQUA),
+                    chosen -> {
+                        stake = chosen;
+                        Player back = viewer();
+                        if (back != null) {
+                            open(back);
+                        }
+                    }).open(player);
+        }
+
         private ItemStack recordItem() {
             CasinoStats stats = casino().stats(viewerId());
             List<Component> lore = new ArrayList<>();
@@ -154,6 +197,7 @@ public final class CoinFlipGame implements CasinoGame {
                 }
                 case HEADS_SLOT -> call(player, true);
                 case TAILS_SLOT -> call(player, false);
+                case STAKE_SLOT -> chooseStake(player);
                 default -> {
                     // The frame and the read-outs do nothing.
                 }
@@ -168,6 +212,17 @@ public final class CoinFlipGame implements CasinoGame {
             }
             if (!casino().begin(player, ID)) {
                 return;
+            }
+            // The stake leaves the balance only when the coin actually goes up,
+            // and comes back doubled only on a winning call.
+            if (stake > 0) {
+                if (!casino().wager().canAfford(player, stake)
+                        || !casino().wager().take(player, stake)) {
+                    casino().notice(player, "not-enough",
+                            "&cYou need &e%amount%&c coins for that call.",
+                            "%amount%", CasinoWager.money(stake));
+                    return;
+                }
             }
             CasinoFeedback.click(player);
             result = "";
@@ -195,9 +250,26 @@ public final class CoinFlipGame implements CasinoGame {
                 casino().win(player, ID);
                 CasinoFeedback.win(player);
                 casino().grant(player, ID);
+                if (stake > 0) {
+                    double payout = stake * 2;
+                    if (casino().wager().give(player, payout)) {
+                        casino().notice(player, "stake-won",
+                                "&a&lYou called it! &e%amount%&a&l coins paid out.",
+                                "%amount%", CasinoWager.money(payout));
+                    } else {
+                        casino().notice(player, "payout-failed",
+                                "&cYour win of &e%amount%&c could not be paid \u2014 tell staff.",
+                                "%amount%", CasinoWager.money(payout));
+                    }
+                }
             } else {
                 casino().lose(player, ID);
                 CasinoFeedback.lose(player);
+                if (stake > 0) {
+                    casino().notice(player, "stake-lost",
+                            "&cYour stake of &e%amount%&c is gone.",
+                            "%amount%", CasinoWager.money(stake));
+                }
             }
             result = "&7It landed " + (landedHeads ? "&6heads" : "&ftails")
                     + "&7 \u2014 you called " + (calledHeads ? "&6heads" : "&ftails") + "&7.";

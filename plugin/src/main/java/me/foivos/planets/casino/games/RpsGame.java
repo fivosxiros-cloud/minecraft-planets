@@ -9,7 +9,10 @@ import me.foivos.planets.casino.CasinoStats;
 import me.foivos.planets.casino.CasinoText;
 import me.foivos.planets.casino.CasinoWager;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -44,7 +47,7 @@ import java.util.UUID;
 public final class RpsGame implements CasinoGame {
 
     /** The id this game is known by in config.yml and in every statistic. */
-    static final String ID = "rps";
+    public static final String ID = "rps";
 
     /** The stakes a table may be opened for. */
     private static final double[] STAKES = {10, 25, 50, 100, 250};
@@ -167,6 +170,131 @@ public final class RpsGame implements CasinoGame {
     /** The table a player is sitting at, or null. */
     private Duel tableOf(UUID who) {
         return atTable.get(who);
+    }
+
+    /** Whether this player is seated at any table right now, as host or guest. */
+    boolean seated(UUID who) {
+        return who != null && atTable.containsKey(who);
+    }
+
+    /** The open table whose host is named, or null. */
+    private Duel openTableOf(String hostName) {
+        if (hostName == null || hostName.isBlank()) {
+            return null;
+        }
+        for (Duel duel : List.copyOf(openTables)) {
+            if (!duel.settled && duel.waiting()
+                    && duel.hostName.equalsIgnoreCase(hostName.trim())) {
+                return duel;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Invites a specific player to the host's open table. They get a line in
+     * chat whose button joins directly ({@code /casino jointable <host>}); the
+     * button runs through the same checks as picking a table in the lobby, so
+     * a table that filled up, closed, or lost its host between the invitation
+     * and the click simply says so.
+     */
+    void sendInvite(Player host, Player target) {
+        Duel duel = tableOf(host.getUniqueId());
+        if (duel == null || duel.settled || !duel.waiting()) {
+            host.sendMessage(Component.text("Your table isn't open - ").color(NamedTextColor.GRAY)
+                    .append(Component.text("open one from the lobby first.").color(NamedTextColor.GRAY)));
+            return;
+        }
+        if (target == null || !target.isOnline()) {
+            host.sendMessage(Component.text("Nobody called '").color(NamedTextColor.RED)
+                    .append(Component.text(target == null ? "" : target.getName()).color(NamedTextColor.YELLOW))
+                    .append(Component.text("' is online.").color(NamedTextColor.RED)));
+            return;
+        }
+        if (target.getUniqueId().equals(host.getUniqueId())) {
+            host.sendMessage(Component.text("That's you - your table is waiting for an opponent.")
+                    .color(NamedTextColor.GRAY));
+            return;
+        }
+        if (seated(target.getUniqueId())) {
+            host.sendMessage(Component.text(target.getName() + " is already at a table.")
+                    .color(NamedTextColor.GRAY));
+            return;
+        }
+        target.sendMessage(Component.text("\u2694 ").color(NamedTextColor.DARK_AQUA)
+                .append(Component.text(host.getName()).color(NamedTextColor.AQUA))
+                .append(Component.text(" challenges you to rock, paper, scissors for ")
+                        .color(NamedTextColor.GRAY))
+                .append(Component.text(CasinoWager.money(duel.stake) + " coins")
+                        .color(NamedTextColor.YELLOW))
+                .append(Component.text(" - winner takes the pot.").color(NamedTextColor.GRAY)));
+        target.sendMessage(Component.text("   ")
+                .append(Component.text("[\u25B6 Join the table]").color(NamedTextColor.GREEN)
+                        .decorate(TextDecoration.BOLD)
+                        .hoverEvent(HoverEvent.showText(
+                                Component.text("Duel " + host.getName() + " for "
+                                        + CasinoWager.money(duel.stake) + " coins")))
+                        .clickEvent(ClickEvent.runCommand("/casino jointable " + host.getName())))
+                .append(Component.text("   or type ").color(NamedTextColor.DARK_GRAY))
+                .append(Component.text("/casino jointable " + host.getName())
+                        .color(NamedTextColor.AQUA)));
+        target.playSound(target.getLocation(), org.bukkit.Sound.ENTITY_EXPERIENCE_ORB_PICKUP, 1.0f, 1.2f);
+        host.sendMessage(Component.text("\u2694 Invited ").color(NamedTextColor.GRAY)
+                .append(Component.text(target.getName()).color(NamedTextColor.AQUA))
+                .append(Component.text(" - one click and they are at your table.")
+                        .color(NamedTextColor.GRAY)));
+    }
+
+    /**
+     * Joins the open table of the named host: the chat-invite button's path,
+     * and {@code /casino jointable <host>} for anyone typing it by hand.
+     *
+     * @return whether the guest is now seated
+     */
+    public boolean joinTable(Player guest, String hostName) {
+        Duel duel = openTableOf(hostName);
+        if (duel == null) {
+            casino.notice(guest, "table-gone",
+                    "&7That table isn't open any more \u2014 its stake was returned.");
+            return false;
+        }
+        if (!acceptShared(guest, duel)) {
+            return false;
+        }
+        new Screen(this, guest).open(guest);
+        return true;
+    }
+
+    /**
+     * The checks and notices every way into a table goes through: the picker,
+     * the chat-invite button and a hand-typed command all land here, so there
+     * is exactly one set of rules about who may sit down.
+     */
+    private boolean acceptShared(Player guest, Duel duel) {
+        if (!casino.wager().available()) {
+            casino.notice(guest, "no-economy",
+                    "&cThere is no economy on this server to bet with.");
+            return false;
+        }
+        if (!casino.wager().canAfford(guest, duel.stake)) {
+            casino.notice(guest, "not-enough",
+                    "&cYou need &e%amount%&c coins to accept that table.",
+                    "%amount%", CasinoWager.money(duel.stake));
+            return false;
+        }
+        if (!casino.begin(guest, ID)) {
+            return false;
+        }
+        if (!accept(guest, duel)) {
+            casino.notice(guest, "withdraw-failed",
+                    "&cThat table could not be joined \u2014 nothing was bet.");
+            return false;
+        }
+        CasinoFeedback.click(guest);
+        casino.notice(guest, "table-joined",
+                "&aYou joined &f%player%&a's table for &e%amount%&a coins. Pick your hand!",
+                "%player%", duel.hostName, "%amount%", CasinoWager.money(duel.stake));
+        return true;
     }
 
     /** Opens a table for a host, taking their stake. */
@@ -489,7 +617,10 @@ public final class RpsGame implements CasinoGame {
                 inventory().setItem(OPPONENT_SLOT, item(Material.GRAY_DYE,
                         plain("\uD83D\uDC64 Waiting for an opponent").color(NamedTextColor.GRAY),
                         List.of(grey("Your table is listed for everyone."),
-                                grey("Stake: " + CasinoWager.money(duel.stake) + " coins"))));
+                                grey("Stake: " + CasinoWager.money(duel.stake) + " coins"),
+                                plain(""),
+                                plain("Click to invite a player")
+                                        .color(NamedTextColor.YELLOW))));
             } else {
                 String theirs = mine == null ? "\u2026" : "hidden";
                 inventory().setItem(OPPONENT_SLOT, headItem(opponent,
@@ -705,6 +836,15 @@ public final class RpsGame implements CasinoGame {
                         render();
                     }
                 }
+                case OPPONENT_SLOT -> {
+                    // Waiting for a challenger: the picker challenges one player
+                    // directly, and the table stays listed for everyone else.
+                    Duel duel = game.tableOf(viewerId());
+                    if (mode == Mode.TABLE && duel != null && duel.waiting()) {
+                        CasinoFeedback.click(player);
+                        new InvitePicker(game, player).open(player);
+                    }
+                }
                 default -> clickTable(player, slot);
             }
         }
@@ -780,31 +920,12 @@ public final class RpsGame implements CasinoGame {
         }
 
         private void accept(Player player, Duel duel) {
-            if (!casino().wager().available()) {
-                casino().notice(player, "no-economy",
-                        "&cThere is no economy on this server to bet with.");
-                return;
+            // The checks and the notices live on the game, so the chat-invite
+            // button and this picker enforce exactly the same rules.
+            if (game.acceptShared(player, duel)) {
+                mode = Mode.TABLE;
+                render();
             }
-            if (!casino().wager().canAfford(player, duel.stake)) {
-                casino().notice(player, "not-enough",
-                        "&cYou need &e%amount%&c coins to accept that table.",
-                        "%amount%", CasinoWager.money(duel.stake));
-                return;
-            }
-            if (!casino().begin(player, ID)) {
-                return;
-            }
-            if (!game.accept(player, duel)) {
-                casino().notice(player, "withdraw-failed",
-                        "&cThat table could not be joined \u2014 nothing was bet.");
-                return;
-            }
-            CasinoFeedback.click(player);
-            casino().notice(player, "table-joined",
-                    "&aYou joined &f%player%&a's table for &e%amount%&a coins. Pick your hand!",
-                    "%player%", duel.hostName, "%amount%", CasinoWager.money(duel.stake));
-            mode = Mode.TABLE;
-            render();
         }
 
         private void commit(Player player, String move) {
@@ -846,5 +967,107 @@ public final class RpsGame implements CasinoGame {
             // to a menu the player has already closed.
             game.voidTable(duel, "A player left the table \u2014 both stakes were returned.");
         }
+    }
+
+    /**
+     * The player picker behind "invite a player": everyone online who is not
+     * already seated at a table, one head each, and a click sends them the
+     * chat challenge with its join button.
+     */
+    private static final class InvitePicker extends CasinoScreenBase {
+
+        private static final int SIZE = 54;
+        private static final int HEADER_SLOT = 4;
+        private static final int[] PLAYER_SLOTS = {
+                10, 11, 12, 13, 14, 15, 16,
+                19, 20, 21, 22, 23, 24, 25,
+                28, 29, 30, 31, 32, 33, 34,
+                37, 38, 39, 40, 41, 42, 43};
+        private static final int BACK_SLOT = 45;
+        private static final int CLOSE_SLOT = 53;
+
+        private final RpsGame game;
+        /** The names on the heads, so a click resolves even after a re-render. */
+        private final List<String> candidates = new ArrayList<>();
+
+        InvitePicker(RpsGame game, Player viewer) {
+            super(game.casino.plugin(), game.casino, viewer, SIZE,
+                    CasinoText.legacy("&8\u2694 Challenge a player", NamedTextColor.DARK_AQUA));
+            this.game = game;
+        }
+
+        @Override
+        protected void render() {
+            Player player = viewer();
+            if (player == null) {
+                return;
+            }
+            inventory().clear();
+            MenuStyle.decorate(inventory(), "\u2694 Challenge a player", "\uD83D\uDC65 Online");
+            candidates.clear();
+            for (Player online : Bukkit.getOnlinePlayers()) {
+                if (!online.getUniqueId().equals(viewerId())
+                        && !game.seated(online.getUniqueId())) {
+                    candidates.add(online.getName());
+                }
+            }
+            inventory().setItem(HEADER_SLOT, MenuStyle.header("Challenge a player", NamedTextColor.GOLD,
+                    List.of("They get a challenge in chat with a join button.",
+                            candidates.size() + " player(s) free to challenge.")));
+            for (int i = 0; i < PLAYER_SLOTS.length && i < candidates.size(); i++) {
+                inventory().setItem(PLAYER_SLOTS[i], headItem(candidates.get(i)));
+            }
+            if (candidates.isEmpty()) {
+                inventory().setItem(22, item(Material.GRAY_DYE,
+                        plain("\uD83D\uDC65 Nobody free to challenge").color(NamedTextColor.GRAY),
+                        List.of(grey("Everyone online is already at a table,"),
+                                grey("or there is nobody else on."))));
+            }
+            inventory().setItem(BACK_SLOT, item(Material.ARROW,
+                    plain("\u2B05 Back to your table").color(NamedTextColor.GRAY), List.of()));
+            inventory().setItem(CLOSE_SLOT, closeButton());
+        }
+
+        private ItemStack headItem(String name) {
+            ItemStack stack = item(Material.PLAYER_HEAD,
+                    plain("\uD83D\uDC64 " + name).color(NamedTextColor.AQUA),
+                    List.of(grey("Send a challenge in chat"),
+                            plain("Click to invite").color(NamedTextColor.YELLOW)));
+            Player online = Bukkit.getPlayerExact(name);
+            if (online != null && stack.getItemMeta() instanceof SkullMeta skull) {
+                skull.setOwningPlayer(online);
+                stack.setItemMeta(skull);
+            }
+            return stack;
+        }
+
+        @Override
+        public void handleClick(InventoryClickEvent event) {
+            int slot = clickedSlot(event);
+            Player player = viewer();
+            if (slot < 0 || player == null) {
+                return;
+            }
+            if (slot == CLOSE_SLOT || slot == BACK_SLOT) {
+                CasinoFeedback.back(player);
+                player.closeInventory();
+                game.openTable(player);
+                return;
+            }
+            for (int i = 0; i < PLAYER_SLOTS.length && i < candidates.size(); i++) {
+                if (PLAYER_SLOTS[i] == slot) {
+                    Player target = Bukkit.getPlayerExact(candidates.get(i));
+                    CasinoFeedback.click(player);
+                    player.closeInventory();
+                    game.sendInvite(player, target);
+                    return;
+                }
+            }
+        }
+    }
+
+    /** Puts a player back at their table screen, host or guest alike. */
+    void openTable(Player player) {
+        new Screen(this, player).open(player);
     }
 }

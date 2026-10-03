@@ -23,6 +23,7 @@ import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 import org.bukkit.configuration.ConfigurationSection;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.Monster;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -43,10 +44,15 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.world.WorldLoadEvent;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import me.foivos.planets.api.PlanetariumHudService;
+import me.foivos.planets.features.PlanetFeatureManager;
+import me.foivos.planets.worldgen.PlanetChunkGenerator;
+import me.foivos.planets.worldgen.PlanetGeneration;
+import me.foivos.planets.worldgen.PlanetProfile;
 import me.foivos.planets.casino.CasinoCommand;
 import me.foivos.planets.casino.CasinoListener;
 import me.foivos.planets.casino.CasinoManager;
 import me.foivos.planets.casino.CasinoScreen;
+import org.bukkit.generator.ChunkGenerator;
 import org.bukkit.permissions.PermissionAttachmentInfo;
 import org.bukkit.plugin.RegisteredServiceProvider;
 import org.bukkit.plugin.ServicePriority;
@@ -82,7 +88,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     /** /planets sub-commands that require op. */
     private static final Set<String> PLANET_ADMIN_SUBS = Set.of(
             "create", "preview", "admin", "icon", "landing", "delete", "setlanding",
-            "lock", "world", "portals", "renameprice", "buy"
+            "lock", "world", "portals", "renameprice", "buy",
+            "list", "profile", "debug"
     );
 
     /** Menu icons the admin panel's Icon action cycles through. */
@@ -296,6 +303,11 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * allowed to edit them ({@code /ship edit}). */
     private SpaceGuard spaceGuard;
 
+    /** Procedural planet profiles and the world-generation engine behind them. */
+    private PlanetGeneration generation;
+    /** The per-planet experience layer (resource packs, client hooks, events). */
+    private PlanetFeatureManager features;
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
@@ -311,6 +323,13 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
         environment.start(this);
         getServer().getPluginManager().registerEvents(environment, this);
+        // Procedural planet profiles (planets/*.yml): the generation engine
+        // builds the terrain, the feature layer runs the per-planet experience.
+        this.generation = new PlanetGeneration(this);
+        generation.reload();
+        this.features = new PlanetFeatureManager(this, generation.registry());
+        features.start();
+        getServer().getPluginManager().registerEvents(features, this);
         // Nothing but this plugin remembers the spawn limits an admin set (Bukkit
         // keeps them in memory), and Multiverse loads its worlds while enabling —
         // so put the saved ones back once the server has finished starting up.
@@ -1173,6 +1192,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     @Override
     public void onDisable() {
+        if (features != null) {
+            features.shutdown();
+        }
         if (skyPackets != null) {
             skyPackets.shutdown();
         }
@@ -1430,7 +1452,78 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 saveConfig();
             }
             applyWorldBordersToAllPlanets();
-            sender.sendMessage(Component.text("Planets config reloaded.").color(NamedTextColor.GREEN));;
+            if (generation != null) {
+                generation.reload();
+            }
+            if (features != null) {
+                features.reload();
+            }
+            sender.sendMessage(Component.text("Planets config reloaded.").color(NamedTextColor.GREEN));
+            return true;
+        }
+
+        // /planets list — every procedural planet profile the engine can build.
+        if (args.length > 0 && args[0].equalsIgnoreCase("list")) {
+            if (generation == null || !canUseGenerationTools(sender)) {
+                sender.sendMessage(Component.text("You don't have permission to use this command.").color(NamedTextColor.RED));
+                return true;
+            }
+            for (String line : generation.listLines()) {
+                sender.sendMessage(Component.text(line).color(NamedTextColor.GRAY));
+            }
+            return true;
+        }
+        // /planets profile <id> — the full settings dump of one profile.
+        if (args.length > 0 && args[0].equalsIgnoreCase("profile")) {
+            if (generation == null || !canUseGenerationTools(sender)) {
+                sender.sendMessage(Component.text("You don't have permission to use this command.").color(NamedTextColor.RED));
+                return true;
+            }
+            PlanetProfile profile = args.length >= 2 ? generation.registry().byId(args[1]) : null;
+            if (profile == null) {
+                sender.sendMessage(Component.text("Unknown profile '").color(NamedTextColor.RED)
+                        .append(Component.text(args.length >= 2 ? args[1] : "").color(NamedTextColor.YELLOW))
+                        .append(Component.text("'. Loaded: ").color(NamedTextColor.RED))
+                        .append(Component.text(generation.registry().isEmpty() ? "(none)"
+                                : String.join(", ", generation.registry().ids())).color(NamedTextColor.YELLOW)));
+            } else {
+                for (String line : generation.describe(profile)) {
+                    sender.sendMessage(Component.text(line).color(NamedTextColor.GRAY));
+                }
+            }
+            return true;
+        }
+        // /planets debug <world|profiles> — what a world (or the engine) runs with.
+        if (args.length > 0 && args[0].equalsIgnoreCase("debug")) {
+            if (generation == null || !canUseGenerationTools(sender)) {
+                sender.sendMessage(Component.text("You don't have permission to use this command.").color(NamedTextColor.RED));
+                return true;
+            }
+            if (args.length >= 2 && args[1].equalsIgnoreCase("profiles")) {
+                for (String line : generation.debugEngine()) {
+                    sender.sendMessage(Component.text(line).color(NamedTextColor.GRAY));
+                }
+                return true;
+            }
+            if (args.length >= 2) {
+                World world = Bukkit.getWorld(args[1]);
+                if (world == null) {
+                    sender.sendMessage(Component.text("No world named '").color(NamedTextColor.RED)
+                            .append(Component.text(args[1]).color(NamedTextColor.YELLOW))
+                            .append(Component.text("' is loaded.").color(NamedTextColor.RED)));
+                    return true;
+                }
+                for (String line : generation.debug(world)) {
+                    sender.sendMessage(Component.text(line).color(NamedTextColor.GRAY));
+                }
+                if (features != null) {
+                    for (String line : features.describe()) {
+                        sender.sendMessage(Component.text(line).color(NamedTextColor.DARK_GRAY));
+                    }
+                }
+                return true;
+            }
+            sender.sendMessage(Component.text("Usage: /planets debug <world|profiles>").color(NamedTextColor.YELLOW));
             return true;
         }
 
@@ -1598,7 +1691,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             String shipPrefix = args.length == 0 ? "" : args[args.length - 1].toLowerCase(Locale.ROOT);
             List<String> shipSuggestions = new ArrayList<>();
             if (args.length <= 1) {
-                shipSuggestions.addAll(List.of("fly", "chart", "invite", "ride", "leave"));
+                shipSuggestions.addAll(List.of("fly", "chart", "invite", "ride", "leave", "find"));
                 if (player.hasPermission("planets.admin")) {
                     shipSuggestions.addAll(List.of("rebuild", "edit", "pads"));
                 }
@@ -1613,6 +1706,11 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     if (!online.getUniqueId().equals(player.getUniqueId())) {
                         shipSuggestions.add(online.getName());
                     }
+                }
+            } else if (args[0].equalsIgnoreCase("find") && spaceWorld != null) {
+                // Every planet with a pad in the sky, by the names players know.
+                for (SpaceWorld.Pad pad : spaceWorld.pads()) {
+                    shipSuggestions.add(pad.label());
                 }
             }
             return shipSuggestions.stream()
@@ -1737,6 +1835,21 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             return playerData.search(prefix).stream()
                     .map(PlayerData::name)
                     .toList();
+        }
+
+        // "/planets profile <id>" — tab-complete the procedural profile ids.
+        if (args[0].equalsIgnoreCase("profile") && args.length == 2 && player.isOp()) {
+            return generation == null ? List.of()
+                    : match(generation.registry().ids(), prefix);
+        }
+        // "/planets debug <world|profiles>" — loaded worlds, or the fixed keyword.
+        if (args[0].equalsIgnoreCase("debug") && args.length == 2 && player.isOp()) {
+            List<String> options = new ArrayList<>();
+            options.add("profiles");
+            for (World world : Bukkit.getWorlds()) {
+                options.add(world.getName());
+            }
+            return match(options, prefix);
         }
 
         if (args[0].equalsIgnoreCase("borders") && player.hasPermission("planets.world")) {
@@ -1871,7 +1984,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
         if (player.isOp()) {
             for (String sub : List.of("create", "preview", "icon", "landing", "setlanding",
-                    "delete", "lock", "world", "portals", "renameprice")) {
+                    "delete", "lock", "world", "portals", "renameprice",
+                    "list", "profile", "debug")) {
                 add(suggestions, prefix, sub);
             }
         }
@@ -2280,6 +2394,14 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 player.sendMessage(Component.text("Generations only apply to normal-type planets; create the nether/end planet separately.").color(NamedTextColor.RED));
                 return;
             }
+            // First: a full procedural profile from planets/*.yml (prehistoric,
+            // alien, ...) — the engine builds the terrain and the feature layer
+            // runs the planet's experience around it.
+            PlanetProfile profile = profileGeneration(generation);
+            if (profile != null) {
+                createProfilePlanet(player, name, profile);
+                return;
+            }
             PlanetTerrain.Spec spec = generationSpec(generation);
             if (spec == null) {
                 player.sendMessage(Component.text("Unknown generation '").color(NamedTextColor.RED)
@@ -2369,6 +2491,96 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * "/planets create &lt;name&gt; moon" builds a moon planet with exactly the
      * generation a buyer would get.
      */
+    /** The full planet profile with this id, when the argument names one exactly. */
+    private PlanetProfile profileGeneration(String id) {
+        if (generation == null || id == null || id.isBlank()) {
+            return null;
+        }
+        PlanetProfile profile = generation.registry().byId(id);
+        return profile != null && profile.id().equalsIgnoreCase(id) ? profile : null;
+    }
+
+    /**
+     * Creates a world from a planets/*.yml profile: the generation engine builds
+     * the terrain from the first chunk, the profile's identity (sky, particles,
+     * effects, weather) is written into config.yml, and the world's generator is
+     * recorded in bukkit.yml so the planet survives a restart through
+     * {@link #getDefaultWorldGenerator}.
+     */
+    private void createProfilePlanet(Player player, String worldName, PlanetProfile profile) {
+        player.sendMessage(Component.text("Creating the world '").color(NamedTextColor.GRAY)
+                .append(Component.text(worldName).color(NamedTextColor.YELLOW))
+                .append(Component.text("' from profile '").color(NamedTextColor.GRAY))
+                .append(Component.text(profile.id()).color(NamedTextColor.YELLOW))
+                .append(Component.text(" (").color(NamedTextColor.GRAY))
+                .append(Component.text(profile.summary()).color(NamedTextColor.YELLOW))
+                .append(Component.text(")...").color(NamedTextColor.GRAY)));
+        World world = generation.create(worldName, profile, null);
+        if (world == null) {
+            player.sendMessage(Component.text("The world '").color(NamedTextColor.RED)
+                    .append(Component.text(worldName).color(NamedTextColor.YELLOW))
+                    .append(Component.text("' couldn't be created. Check the console — the folder may already exist.").color(NamedTextColor.RED)));
+            return;
+        }
+        generation.registry().bind(worldName, profile.id(), getConfig());
+        generation.applyIdentity(worldName, profile, getConfig());
+        recordGeneratorInBukkitYml(worldName);
+        saveConfigQuietly();
+        PlanetTravel.loadConfig(getConfig());
+        setPlanetWorldBorder(worldName);
+        player.teleportAsync(world.getSpawnLocation());
+        player.sendMessage(Component.text("Planet ").color(NamedTextColor.GREEN)
+                .append(Component.text(worldName).color(NamedTextColor.YELLOW))
+                .append(Component.text(" created from profile ").color(NamedTextColor.GREEN))
+                .append(Component.text(profile.id()).color(NamedTextColor.YELLOW))
+                .append(Component.text(" — terrain is procedural; walk around to generate chunks.").color(NamedTextColor.GREEN)));
+        player.sendMessage(Component.text("Inspect it with ").color(NamedTextColor.GRAY)
+                .append(Component.text("/planets debug " + worldName).color(NamedTextColor.YELLOW))
+                .append(Component.text(" and the settings with ").color(NamedTextColor.GRAY))
+                .append(Component.text("/planets profile " + profile.id()).color(NamedTextColor.YELLOW))
+                .append(Component.text(".").color(NamedTextColor.GRAY)));
+    }
+
+    /**
+     * Writes {@code worlds.<name>.generator: planets:planet} into bukkit.yml.
+     * Without it, Multiverse re-creating the world after a restart would hand
+     * Bukkit a world with no generator and the planet would come back flat;
+     * with it, CraftServer asks this plugin for the generator instead.
+     */
+    private void recordGeneratorInBukkitYml(String worldName) {
+        File bukkitYml = new File("bukkit.yml");
+        YamlConfiguration bukkit = YamlConfiguration.loadConfiguration(bukkitYml);
+        bukkit.set("worlds." + worldName + ".generator", getName() + ":planet");
+        try {
+            bukkit.save(bukkitYml);
+        } catch (java.io.IOException ex) {
+            getLogger().warning("Could not record the generator of '" + worldName
+                    + "' in bukkit.yml: " + ex.getMessage());
+        }
+    }
+
+    /**
+     * The server's fallback when a world is (re)created without an explicit
+     * generator — Multiverse re-creating a planet world after a restart, or any
+     * bare {@code new WorldCreator(name).createWorld()} — so a procedural planet
+     * keeps its terrain instead of coming back flat. Fires only when bukkit.yml
+     * names this plugin for the world, which
+     * {@link #recordGeneratorInBukkitYml(String)} arranges at creation time.
+     */
+    @Override
+    public ChunkGenerator getDefaultWorldGenerator(String worldName, String id) {
+        if (generation == null) {
+            return null;
+        }
+        PlanetProfile profile = generation.registry().profileOf(worldName);
+        if (profile == null) {
+            return null;
+        }
+        getLogger().info("Reattaching the procedural generator of '" + worldName
+                + "' (profile '" + profile.id() + "').");
+        return new PlanetChunkGenerator(profile);
+    }
+
     private PlanetTerrain.Spec generationSpec(String id) {
         if (id == null || id.isBlank()) {
             return null;
@@ -2399,13 +2611,21 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     /** Whether {@code id} is a generation this server can build (preset or archetype). */
     private boolean isGeneration(String id) {
-        return generationSpec(id) != null;
+        return generationSpec(id) != null || profileGeneration(id) != null;
+    }
+
+    /** Op, or a permission plugin granting planets.admin — the diagnostic commands. */
+    private boolean canUseGenerationTools(CommandSender sender) {
+        return sender.isOp() || sender.hasPermission("planets.admin");
     }
 
     /** Every generation id available, for tab completion and error messages. */
     private List<String> generationIds() {
         List<String> ids = new ArrayList<>(PlanetArchetypes.ids());
         ids.add("void");
+        if (generation != null) {
+            ids.addAll(generation.registry().ids());
+        }
         ConfigurationSection presets = getConfig().getConfigurationSection("generation-presets");
         if (presets != null) {
             ids.addAll(presets.getKeys(false));
@@ -6111,8 +6331,11 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             return;
         }
         if (args.length >= 1 && args[0].equalsIgnoreCase("edit")) {
-            if (!canUseAdmin(player)) {
-                player.sendMessage(Component.text("Only admins can edit space.")
+            // Op only, deliberately: the ship platform is a public pad that
+            // every player spawns on, so its editing is not part of the
+            // planets.admin toolkit a trusted builder might hold.
+            if (!player.isOp()) {
+                player.sendMessage(Component.text("Only ops can edit space.")
                         .color(NamedTextColor.RED));
                 return;
             }
@@ -6123,8 +6346,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
         if (args.length >= 1 && args[0].equalsIgnoreCase("pads")) {
             // The planet pads are their own permission: /ship edit stops at them.
-            if (!canUseAdmin(player)) {
-                player.sendMessage(Component.text("Only admins can edit the planet pads.")
+            if (!player.isOp()) {
+                player.sendMessage(Component.text("Only ops can edit the planet pads.")
                         .color(NamedTextColor.RED));
                 return;
             }
@@ -6134,8 +6357,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             return;
         }
         if (args.length >= 1 && args[0].equalsIgnoreCase("rebuild")) {
-            if (!canUseAdmin(player)) {
-                player.sendMessage(Component.text("Only admins can rebuild the space world.")
+            if (!player.isOp()) {
+                player.sendMessage(Component.text("Only ops can rebuild the space world.")
                         .color(NamedTextColor.RED));
                 return;
             }
@@ -6181,6 +6404,15 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 return;
             }
             spaceTravel.openStarChart(player);
+            return;
+        }
+        if (args.length >= 1 && args[0].equalsIgnoreCase("find")) {
+            // The sky is a big place: /ship find names a planet's pad, says how
+            // far and which way, and draws a trail of particles to fly along.
+            if (shipPilot != null) {
+                shipPilot.find(player, args.length >= 2
+                        ? String.join(" ", Arrays.copyOfRange(args, 1, args.length)) : null);
+            }
             return;
         }
         if (args.length >= 1 && args[0].equalsIgnoreCase("ride")) {
@@ -7161,6 +7393,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .replace("%y%", String.valueOf(here.getBlockY()))
                 .replace("%z%", String.valueOf(here.getBlockZ()))
                 .replace("%players%", String.valueOf(Bukkit.getOnlinePlayers().size()))
+                // Real-world time (the server's clock), for the sidebar's Time line.
+                .replace("%realtime%", java.time.LocalTime.now()
+                        .format(java.time.format.DateTimeFormatter.ofPattern("HH:mm")))
                 .replace("%visitors%", String.valueOf(world == null ? 0 : world.getPlayers().size()))
                 .replace("%members%", data == null ? "-" : String.valueOf(data.totalMembers()))
                 .replace("%blocks%", data == null ? "-" : String.valueOf(data.totalBlocksPlaced()))

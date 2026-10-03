@@ -1,0 +1,503 @@
+# ══════════════════════════════════════════════════════════════════════════════
+#  PREHISTORIC — the showcase planet for the procedural generation engine.
+#
+#  This is the profile the engine was built to prove: large-scale geography
+#  (continents and inland seas), medium-scale terrain (mountains, valleys,
+#  canyons, cliffs), small-scale detail, a real biome distribution driven by
+#  temperature/humidity/altitude, cave systems, fossils, giant trees, rare
+#  landmarks and its own atmosphere.
+#
+#  Copy this file, change the numbers, and you have a new planet. Nothing here
+#  needs Java.
+# ══════════════════════════════════════════════════════════════════════════════
+
+id: prehistoric
+display-name: "Prehistoric"
+description: "Fertile river valleys, towering fern forests and the bones of giants."
+icon: MOSSY_COBBLESTONE
+style: natural
+
+# "random" generates a seed once and remembers it, so the world stays the same
+# forever. Any number pins it exactly.
+seed: random
+
+# ── Materials ────────────────────────────────────────────────────────────────
+# Every block below can be referenced by these names anywhere in this file, so a
+# planet's whole look can be re-themed from one place.
+palette:
+  stone: STONE
+  dirt: DIRT
+  grass: GRASS_BLOCK
+  sand: SAND
+  gravel: GRAVEL
+  ice: PACKED_ICE
+  lava: LAVA
+  deepslate: DEEPSLATE
+  mud: MUD
+  moss: MOSS_BLOCK
+  fern: LARGE_FERN
+  jungle_log: JUNGLE_LOG
+  jungle_leaves: JUNGLE_LEAVES
+  amber: HONEYCOMB_BLOCK
+
+# ── Terrain ──────────────────────────────────────────────────────────────────
+terrain:
+  height:
+    base: 72          # the neutral level the noise stack is added to
+    min: 22           # never lower than this
+    max: 260          # never higher than this
+  sea-level: 64
+  liquid: water
+
+  # Horizontal stretch and vertical exaggeration. 1.0 = as written.
+  horizontal-scale: 1.0
+  vertical-scale: 1.0
+
+  # The height stack: each layer is its own noise field added to the base height.
+  # Continentalness makes landmasses and inland seas; erosion makes broad basins
+  # and worn-down regions; weirdness is the "unusual" dial that biome rules read.
+  layers:
+    continentalness:
+      type: perlin
+      scale: 620        # feature size in blocks: big, slow continents
+      amplitude: 30     # how many blocks it may raise or lower the ground
+      octaves: 3
+      persistence: 0.5
+      lacunarity: 2.0
+    erosion:
+      type: perlin
+      scale: 240
+      amplitude: 16
+      octaves: 4
+    weirdness:
+      type: perlin
+      scale: 180
+      amplitude: 9
+      octaves: 3
+
+  # Mountains: ridged noise, domain-warped so the ridges are ragged rather than
+  # smooth. This is what makes a range look like rock instead of a hill.
+  mountains:
+    enabled: true
+    strength: 58        # how many blocks tall
+    scale: 380          # how wide a single massif is
+    width: 260          # the band it fades in over
+    sharpness: 0.8      # 1.0 = hard crests, 0.0 = soft hills
+
+  # Valleys: broad, soft depressions that give the lowlands somewhere to be.
+  valleys:
+    enabled: true
+    strength: 12
+    scale: 300
+    width: 200
+    sharpness: 0.15
+
+  # Canyons: narrow, deep cuts that follow the canyon field. width is the crack's
+  # width in noise units — keep it small.
+  canyons:
+    enabled: true
+    strength: 26
+    scale: 220
+    width: 0.35
+    sharpness: 0.7
+
+  # Cliffs: the terrain is stepped, so slopes become scarps.
+  cliffs:
+    enabled: true
+    strength: 7
+    width: 4            # step size in blocks (the cliff face height)
+    scale: 190
+    sharpness: 0.6
+
+  # Plateaus: flat-topped rises, like the mesas a prehistoric plain would have.
+  plateaus:
+    enabled: true
+    strength: 20
+    scale: 420
+    width: 60
+    sharpness: 0.45
+
+  # Small-scale roughness, so the ground is never a clean mathematical surface.
+  detail-strength: 3.5
+  detail-frequency: 0.022
+
+  # Domain warping of the whole landscape: every feature is sampled in warped
+  # coordinates, so nothing lines up in a grid.
+  distortion-strength: 14
+  distortion-frequency: 0.0022
+
+  islands:
+    enabled: false
+
+# ── Surface ──────────────────────────────────────────────────────────────────
+# Listed top → down. The first layer whose conditions match wins, so the snow
+# layer only applies above y 175 and everything else falls through to grass.
+surface:
+  layers:
+    - { block: SNOW_BLOCK, depth: 3, min-altitude: 175 }
+    - { block: STONE, depth: 2, min-altitude: 160 }
+    - { block: GRASS_BLOCK, depth: 1 }
+    - { block: DIRT, depth: 4 }
+    - { block: STONE, depth: 26 }
+    - { block: DEEPSLATE, depth: 999 }
+
+# ── Biomes ───────────────────────────────────────────────────────────────────
+# These are planet biomes, not Minecraft biomes. Each one says which Minecraft
+# biome the client is told about (for colours, weather and mob spawns), which
+# environmental ranges it occupies, what its surface is and what grows there.
+# Placement is by environment, never by dice, so regions stay coherent.
+biomes:
+  fern_plains:
+    biome: plains
+    priority: 0
+    temperature: { min: 0.35, max: 1.0 }
+    humidity: { min: 0.0, max: 0.55 }
+    surface:
+      - { block: GRASS_BLOCK, depth: 1 }
+      - { block: DIRT, depth: 4 }
+      - { block: STONE, depth: 24 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.9 }
+    decorations: [grass, fern_patch, boulder, bones]
+
+  fern_forest:
+    biome: forest
+    priority: 1
+    temperature: { min: 0.4, max: 1.0 }
+    humidity: { min: 0.5, max: 1.0 }
+    surface:
+      - { block: GRASS_BLOCK, depth: 1 }
+      - { block: DIRT, depth: 5 }
+      - { block: STONE, depth: 24 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 1.6 }
+    structures: { density: 1.2 }
+    decorations: [grass, fern_patch, giant_fern, ancient_tree, boulder, fossil_scatter]
+
+  swamp:
+    biome: swamp
+    priority: 2
+    temperature: { min: 0.4, max: 0.9 }
+    humidity: { min: 0.7, max: 1.0 }
+    altitude: { max: 68 }
+    surface:
+      - { block: MUD, depth: 2 }
+      - { block: GRAVEL, depth: 2 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 1.1 }
+    decorations: [grass, reed_bed, swamp_tree, bones, fossil_scatter]
+
+  fern_hills:
+    biome: taiga
+    priority: 1
+    temperature: { min: 0.15, max: 0.5 }
+    humidity: { min: 0.3, max: 1.0 }
+    altitude: { min: 96 }
+    vegetation: { density: 0.8 }
+    decorations: [grass, fern_patch, ancient_tree, boulder]
+
+  badlands:
+    biome: badlands
+    priority: 1
+    temperature: { min: 0.6, max: 1.0 }
+    humidity: { min: 0.0, max: 0.3 }
+    surface:
+      - { block: RED_SAND, depth: 3 }
+      - { block: TERRACOTTA, depth: 6 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.15 }
+    structures: { density: 1.4 }
+    decorations: [bones, fossil_scatter, boulder]
+
+  ancient_mountains:
+    biome: snowy_peaks
+    priority: 3
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { min: 140 }
+    surface:
+      - { block: SNOW_BLOCK, depth: 4 }
+      - { block: PACKED_ICE, depth: 2 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.05 }
+    structures: { density: 0.6 }
+    decorations: [boulder, ice_shard]
+
+  inland_sea:
+    biome: ocean
+    priority: 2
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { max: 62 }
+    surface:
+      - { block: SAND, depth: 3 }
+      - { block: GRAVEL, depth: 3 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.0 }
+    decorations: []
+
+  fern_beach:
+    biome: beach
+    priority: 4
+    temperature: { min: 0.0, max: 1.0 }
+    humidity: { min: 0.0, max: 1.0 }
+    altitude: { min: 62, max: 67 }
+    surface:
+      - { block: SAND, depth: 4 }
+      - { block: STONE, depth: 20 }
+      - { block: DEEPSLATE, depth: 999 }
+    vegetation: { density: 0.1 }
+    decorations: [reed_bed]
+
+# ── Caves ────────────────────────────────────────────────────────────────────
+caves:
+  enabled: true
+  # Twisting tunnel network. density is how much of the band is hollow.
+  tunnels:
+    enabled: true
+    density: 0.55
+    scale: 95
+    size: 1.0
+    min-y: 12
+    max-y: 78
+  # Large open caverns, the kind a prehistoric world should have.
+  caverns:
+    enabled: true
+    density: 0.1
+    scale: 210
+    size: 1.8
+    min-y: 10
+    max-y: 62
+  # Underground lakes where a cavern dips below sea level.
+  underground-lakes: true
+  # A per-biome tweak: the badlands are riddled with tunnels, the sea floor isn't.
+  overrides:
+    badlands:
+      tunnels: { density: 0.75 }
+    inland_sea:
+      enabled: false
+
+# ── Structures ───────────────────────────────────────────────────────────────
+structures:
+  enabled: true
+  density: 1.0
+  max-per-chunk: 2
+  min-distance: 120
+
+  types:
+    # A ruined stone circle on the plains, now mostly fallen down.
+    standing_stones:
+      type: stone-circle
+      rarity: 0.006
+      cell-size: 300
+      biomes: [fern_plains, badlands, fern_hills]
+      max-slope: 3
+      params: { radius: 9, stones: 9 }
+
+    # An abandoned camp: the people who lived here are long gone.
+    old_camp:
+      type: campsite
+      rarity: 0.01
+      cell-size: 220
+      biomes: [fern_plains, fern_forest]
+      max-slope: 3
+      params: { tents: 3, campfire: false }
+
+    # A well, for the villages that are no longer here.
+    old_well:
+      type: well
+      rarity: 0.012
+      cell-size: 200
+      biomes: [fern_plains]
+      max-slope: 2
+
+    # A fallen tree, scattered around the forests.
+    fallen_giant:
+      type: dead-tree
+      rarity: 0.02
+      cell-size: 140
+      biomes: [fern_forest, swamp]
+      scale: 1.6
+      params: { height: 14 }
+
+  # Landmarks are far rarer and deliberately memorable: an admin walking a
+  # planet should find one every few thousand blocks, not every few hundred.
+  landmarks:
+    giant_skeleton:
+      type: fossil
+      rarity: 0.0012
+      cell-size: 900
+      min-distance: 700
+      biomes: [fern_plains, badlands, fern_hills]
+      max-slope: 5
+      announce: true
+      scale: 1.4
+      params: { length: 34, height: 8, buried: false }
+
+    fossil_valley:
+      type: bones
+      rarity: 0.0025
+      cell-size: 700
+      min-distance: 500
+      biomes: [badlands, fern_plains]
+      scale: 2.0
+      params: { radius: 18 }
+
+    ancient_temple:
+      type: temple
+      rarity: 0.001
+      cell-size: 1100
+      min-distance: 800
+      biomes: [fern_forest, fern_plains]
+      max-slope: 4
+      announce: true
+      palette:
+        primary: MOSSY_STONE_BRICKS
+        accent: HONEYCOMB_BLOCK
+      params: { size: 13, steps: 4 }
+
+    dinosaur_nest:
+      type: nest
+      rarity: 0.003
+      cell-size: 600
+      min-distance: 400
+      biomes: [fern_plains, swamp, badlands]
+      scale: 1.3
+      params: { radius: 7, eggs: 6 }
+
+    titan_tree:
+      type: giant-tree
+      rarity: 0.004
+      cell-size: 500
+      min-distance: 300
+      biomes: [fern_forest]
+      scale: 1.5
+      params: { height: 42, radius: 14, branches: 7 }
+
+# ── Vegetation ───────────────────────────────────────────────────────────────
+# density is the number of this decoration per chunk, averaged over the world.
+decorations:
+  enabled: true
+  density: 1.0
+  types:
+    grass:
+      type: grass
+      density: 46
+      on: [grass_block, moss_block]
+      params: { block: SHORT_GRASS, height: 1 }
+
+    fern_patch:
+      type: grass
+      density: 22
+      on: [grass_block, moss_block]
+      params: { block: LARGE_FERN }
+
+    giant_fern:
+      type: bush
+      density: 4
+      biomes: [fern_forest, swamp]
+      on: [grass_block, moss_block, mud]
+      scale: 1.8
+      params: { radius: 3, height: 4, trunk: JUNGLE_LOG, leaves: JUNGLE_LEAVES }
+
+    ancient_tree:
+      type: giant-tree
+      density: 1.6
+      biomes: [fern_forest]
+      on: [grass_block]
+      max-slope: 3
+      scale: 1.1
+      params:
+        trunk: JUNGLE_LOG
+        leaves: JUNGLE_LEAVES
+        height: 26
+        canopy-radius: 8
+        canopy: blob
+
+    swamp_tree:
+      type: tree
+      density: 2.5
+      biomes: [swamp]
+      on: [mud, grass_block]
+      params:
+        trunk: OAK_LOG
+        leaves: OAK_LEAVES
+        height: 7
+        canopy-radius: 4
+        canopy: flat
+
+    reed_bed:
+      type: grass
+      density: 18
+      biomes: [swamp, fern_beach]
+      on: [mud, sand, gravel]
+      params: { block: SUGAR_CANE }
+
+    boulder:
+      type: rock
+      density: 3
+      on: [grass_block, stone, red_sand, snow_block]
+      scale: 1.4
+      params: { block: MOSSY_COBBLESTONE, radius: 3 }
+
+    bones:
+      type: bones
+      density: 0.5
+      biomes: [fern_plains, badlands, fern_hills]
+      params: { block: BONE_BLOCK, radius: 4 }
+
+    fossil_scatter:
+      type: fossil
+      density: 0.25
+      biomes: [badlands, fern_forest, swamp]
+      max-slope: 4
+      params: { block: BONE_BLOCK, length: 9, height: 3 }
+
+    ice_shard:
+      type: crystal
+      density: 0.6
+      biomes: [ancient_mountains]
+      on: [snow_block, packed_ice, stone]
+      params: { block: PACKED_ICE, tip: BLUE_ICE, height: 4, count: 3 }
+
+# ── Atmosphere ───────────────────────────────────────────────────────────────
+atmosphere:
+  # Sky and fog tint. Without ProtocolLib these drive the coloured haze; with it,
+  # the real dimension colours are rewritten per player.
+  sky-color: "#8FC7E8"
+  fog-color: "#A8D2B8"
+  haze-density: 5
+  # Particles: the first entry is the planet's named ambient effect.
+  particles:
+    - { type: spores, density: 8, radius: 4, min-height: 0.5, max-height: 3.5 }
+    - { type: dust, density: 4, radius: 5, color: "#C8E0A0" }
+  weather: rain
+  time: null
+  # Planet physics: prehistoric air is thick and the world is heavy.
+  effects:
+    jump: 0
+  # Calm, natural music.
+  music:
+    tracks:
+      - "MUSIC_OVERWORLD_FOREST:280"
+      - "MUSIC_OVERWORLD_JUNGLE:260"
+      - "MUSIC_OVERWORLD_MEADOW:210"
+
+# ── Features and gameplay ────────────────────────────────────────────────────
+# These switches are read by the feature layer (see PlanetFeatureRegistry): a
+# feature registered by a module can be switched on or off per planet without
+# touching generation. Unknown names are ignored, so a profile written today
+# still loads after a module is added.
+features:
+  fossils: true
+  giant_trees: true
+  prehistoric_plants: true
+  dinosaurs: false        # no dinosaur module is installed yet; harmless to declare
+
+gameplay:
+  custom-mob-spawning: false
+  environmental-hazards: false

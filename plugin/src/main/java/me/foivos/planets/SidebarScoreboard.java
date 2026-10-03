@@ -75,6 +75,8 @@ public final class SidebarScoreboard {
     private static final String BLANK_TEMPLATE = "&7--------------------";
     /** The Friends line added to a config.yml written before the social system. */
     private static final String FRIENDS_TEMPLATE = "Friends: %friends%";
+    /** The Time line added to a config.yml written before the real-world clock. */
+    private static final String TIME_TEMPLATE = "&7Time        &8| &e%realtime%";
 
     /**
      * The shipped lines, used when config.yml lists none — and the shape every
@@ -95,6 +97,7 @@ public final class SidebarScoreboard {
             new Line("balance", "Balance",   "&7Balance    &8| &6%balance% &e\u20BE"),
             new Line("friends", "Friends",   "&7Friends     &8| &a%friends%"),
             new Line("playtime", "Playtime", "&7Playtime   &8| &b%playtime%"),
+            new Line("time", "Time",       "&7Time       &8| &e%realtime%"),
             new Line("kills", "Kills",       "&7Kills      &8| &d%kills%"),
             new Line("deaths", "Deaths",     "&7Deaths     &8| &c%deaths%"),
             new Line("bounty", "Bounty",     "&7Bounty     &8| &c%bounty% &e\u20BE"));
@@ -173,6 +176,20 @@ public final class SidebarScoreboard {
                 && parsed.size() < MAX_LINES) {
             parsed.add(new Line(uniqueId(slug("Friends"), used), "Friends", FRIENDS_TEMPLATE));
             rawLines.add(lineEntry("Friends", FRIENDS_TEMPLATE));
+            grown = true;
+        }
+        if (!parsed.isEmpty()
+                && parsed.stream().noneMatch(line -> line.template().contains("%realtime%"))
+                && parsed.size() < MAX_LINES) {
+            // A real-life clock: the Time line goes in after the separator and
+            // the player's name, so the board reads title, rule, name, time,
+            // then the numbers. A player who picked their own lines keeps
+            // their choice and can add it from /settings → Sidebar.
+            Line time = new Line(uniqueId(slug("Time"), used), "Time", TIME_TEMPLATE);
+            Map<String, Object> timeEntry = lineEntry("Time", TIME_TEMPLATE);
+            int at = Math.min(parsed.size() >= 2 ? 2 : parsed.size(), parsed.size());
+            parsed.add(at, time);
+            rawLines.add(Math.min(at, rawLines.size()), timeEntry);
             grown = true;
         }
         if (!parsed.isEmpty() && parsed.size() < MAX_LINES) {

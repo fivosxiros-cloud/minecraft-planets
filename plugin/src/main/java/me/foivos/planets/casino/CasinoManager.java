@@ -1,6 +1,7 @@
 package me.foivos.planets.casino;
 
 import me.foivos.planets.Planets;
+import me.foivos.planets.casino.games.RpsGame;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Material;
 import org.bukkit.configuration.ConfigurationSection;
@@ -857,6 +858,22 @@ public final class CasinoManager {
      */
     public CasinoWager wager() {
         return wager;
+    }
+
+    /**
+     * Joins the named host's open rock-paper-scissors table — the chat
+     * invitation's join button, and {@code /casino jointable <host>} for
+     * anyone typing it by hand. The same checks apply as picking a table in
+     * the lobby, so a table that closed in between simply says so.
+     */
+    public boolean joinRpsTable(Player player, String hostName) {
+        if (hostName == null || hostName.isBlank()) {
+            return false;
+        }
+        if (!(games.get(RpsGame.ID) instanceof RpsGame rps)) {
+            return false;
+        }
+        return rps.joinTable(player, hostName);
     }
 
     private static Map<String, String> defaultMessages() {

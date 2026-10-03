@@ -42,17 +42,20 @@ import java.util.Set;
  */
 final class SpaceWorld {
 
-    private static final int SHIP_HALF = 4;     // the ship platform is 9x9
     private static final int PAD_HALF = 3;      // a pad is 7x7
     private static final int END_ROD_HEIGHT = 4;
     /** How far a pad's protection reaches from its centre (a pad is 7x7 wide). */
     private static final double PAD_REACH = 9.0;
+    /** How far an older, smaller deck's corner sat out, so it is never overwritten. */
+    private static final int LEGACY_SHIP_HALF = 4;
 
     private final Planets plugin;
 
     private boolean enabled = true;
     private String worldName = "planets_space";
     private double shipY = 96;
+    /** The spawn platform's half-width; shipped at 6, so the deck is 13x13. */
+    private int shipHalf = 6;
     private double ringRadius = 120;
     private double dockRadius = 12;
     private double cruiseSpeed = 0.08;
@@ -103,6 +106,7 @@ final class SpaceWorld {
             worldName = configured;
         }
         shipY = Math.max(-32, Math.min(256, section.getDouble("ship-y", 96)));
+        shipHalf = Math.max(3, Math.min(16, section.getInt("ship-half", 6)));
         ringRadius = Math.max(40, section.getDouble("ring-radius", 120));
         dockRadius = Math.max(4, section.getDouble("dock-radius", 12));
         cruiseSpeed = Math.max(0.02, Math.min(1.0, section.getDouble("speed", 0.08)));
@@ -304,8 +308,14 @@ final class SpaceWorld {
      */
     private boolean shipExists(World world) {
         int y = (int) shipY;
+        // The four corners of the platform, and the two a smaller deck of an
+        // older build would still be sitting on: any of them counts as "there
+        // is a ship here", so a take-off never re-lays the deck over whatever
+        // an admin has built on it. /ship rebuild is what actually re-lays it.
         int[][] markers = {{0, y, 0}, {0, y + 1, 0},
-                {SHIP_HALF, y, SHIP_HALF}, {-SHIP_HALF, y, -SHIP_HALF}};
+                {shipHalf, y, shipHalf}, {-shipHalf, y, -shipHalf},
+                {LEGACY_SHIP_HALF, y, LEGACY_SHIP_HALF},
+                {-LEGACY_SHIP_HALF, y, -LEGACY_SHIP_HALF}};
         for (int[] marker : markers) {
             if (!world.getBlockAt(marker[0], marker[1], marker[2]).getType().isAir()) {
                 return true;
@@ -317,21 +327,21 @@ final class SpaceWorld {
     /** Lays the ship platform down (only called when there is no ship there yet). */
     private void buildShip(World world) {
         int y = (int) shipY;
-        for (int x = -SHIP_HALF; x <= SHIP_HALF; x++) {
-            for (int z = -SHIP_HALF; z <= SHIP_HALF; z++) {
-                boolean edge = Math.abs(x) == SHIP_HALF || Math.abs(z) == SHIP_HALF;
+        for (int x = -shipHalf; x <= shipHalf; x++) {
+            for (int z = -shipHalf; z <= shipHalf; z++) {
+                boolean edge = Math.abs(x) == shipHalf || Math.abs(z) == shipHalf;
                 Material material = edge ? Material.POLISHED_DEEPSLATE : Material.DEEPSLATE_TILES;
                 world.getBlockAt(x, y, z).setType(material, false);
             }
         }
         // Hull trim, a cockpit block and four masts, so it reads as a ship.
         for (int i = -1; i <= 1; i++) {
-            world.getBlockAt(i, y, -SHIP_HALF).setType(Material.COPPER_BLOCK, false);
-            world.getBlockAt(i, y, SHIP_HALF).setType(Material.COPPER_BLOCK, false);
+            world.getBlockAt(i, y, -shipHalf).setType(Material.COPPER_BLOCK, false);
+            world.getBlockAt(i, y, shipHalf).setType(Material.COPPER_BLOCK, false);
         }
         world.getBlockAt(0, y + 1, 0).setType(Material.LODESTONE, false);
-        for (int[] corner : new int[][]{{-SHIP_HALF, -SHIP_HALF}, {-SHIP_HALF, SHIP_HALF},
-                {SHIP_HALF, -SHIP_HALF}, {SHIP_HALF, SHIP_HALF}}) {
+        for (int[] corner : new int[][]{{-shipHalf, -shipHalf}, {-shipHalf, shipHalf},
+                {shipHalf, -shipHalf}, {shipHalf, shipHalf}}) {
             for (int i = 0; i < END_ROD_HEIGHT; i++) {
                 world.getBlockAt(corner[0], y + 1 + i, corner[1]).setType(Material.END_ROD, false);
             }
