@@ -41,6 +41,24 @@ public final class PlanetRegistry {
         return loaded.size();
     }
 
+    /**
+     * Adds profiles that are not read from {@code planets/*.yml} — the planet
+     * designer's filters live in config.yml instead. Replaces any profile with
+     * the same id, so calling this again after a reload is always safe.
+     */
+    public void registerAll(Map<String, PlanetProfile> extra) {
+        if (extra.isEmpty()) {
+            return;
+        }
+        Map<String, PlanetProfile> merged = new LinkedHashMap<>(profiles);
+        for (Map.Entry<String, PlanetProfile> entry : extra.entrySet()) {
+            merged.put(entry.getKey().toLowerCase(Locale.ROOT), entry.getValue());
+        }
+        this.profiles = Map.copyOf(merged);
+        plugin.getLogger().info("[PlanetGenerator] Registered " + extra.size()
+                + " designed planet(s) from config.yml");
+    }
+
     /** Reads the persisted world → profile mapping. */
     public void loadWorldMapping(FileConfiguration config) {
         worlds.clear();

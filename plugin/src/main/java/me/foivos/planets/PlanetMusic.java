@@ -257,8 +257,9 @@ final class PlanetMusic {
     private void play(Player player, List<Track> list, String worldKey, long now) {
         Track track = list.get(random.nextInt(list.size()));
         // Silence the vanilla background music first, so the two never overlap.
-        player.stopSound(SoundCategory.MUSIC);
-        player.playSound(player.getLocation(), track.sound(), SoundCategory.MUSIC, volume, 1.0f);
+        // The track is tied to the player rather than dropped at the spot they
+        // are standing, so walking away from that spot doesn't fade it out.
+        PlayerMusic.emit(player, track.sound(), volume);
         playing.put(player.getUniqueId(), new Now(worldKey, now + track.seconds() * 1000L + gap()));
     }
 

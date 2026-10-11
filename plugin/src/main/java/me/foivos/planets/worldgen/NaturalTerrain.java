@@ -33,8 +33,14 @@ import org.bukkit.generator.ChunkGenerator;
  */
 public final class NaturalTerrain implements TerrainModule {
 
-    /** How far below the surface the module fills: deeper is wasted work. */
-    private static final int COLUMN_DEPTH = 96;
+    /*
+     * A column is filled all the way down to the world floor, with no shallow
+     * cut-off. There used to be one (96 blocks below the surface), and it left the
+     * landscape hanging over a bare bedrock plane: any column higher than y=33 kept
+     * its stone from surfaceY-96 downward, so the ground floated 30 to 290 blocks
+     * above the floor with nothing under it, reading as slabs in the sky and sheer
+     * walls where a chunk ended. The ground of a planet has to reach its floor.
+     */
 
     @Override
     public GenerationStyle style() {
@@ -54,7 +60,7 @@ public final class NaturalTerrain implements TerrainModule {
 
         Material ground = context.profile().palette().get("stone", Material.STONE);
         BlockData stone = ground.createBlockData();
-        int bottom = Math.max(context.floor(), surfaceY - COLUMN_DEPTH);
+        int bottom = context.floor();
         TerrainModule.fill(data, localX, localZ, bottom, surfaceY, stone);
         return Column.of(surfaceY, ground, null, surfaceY < context.seaLevel(), null);
     }
@@ -91,9 +97,71 @@ public final class NaturalTerrain implements TerrainModule {
         if (context.detail() != null) {
             height += context.detail().sample(sx, sz) * terrain.detailStrength();
         }
-        height *= terrain.verticalScale();
+        // Vertical scale multiplies the relief, not the base. Scaling the whole sum moved
+        // the land itself: a preset with base 64 and vertical-scale 0.8 put its ground at
+        // 51, under its own sea at 62, so a design meaning "low green country cut by water"
+        // came out as open ocean. Keeping the base where it was configured keeps sea level
+        // where the preset put it and leaves vertical-scale meaning what it says: how tall
+        // the landscape is.
+        double base = terrain.clampedBase();
+        height = base + (height - base) * terrain.verticalScale();
 
+        // Squeeze the finished height into the planet's window instead of clipping it to
+        // the window. The stack above is much wider than the window is tall — a preset can
+        // easily sum to 150 blocks inside a 46-block band — and a hard clip turns every
+        // overshoot into a perfectly flat plane with a sheer face at its edge, which is
+        // what made so much of a planet read as walls rather than landscape. Saturating is
+        // continuous everywhere, so the same shape is compressed into the blocks beside the
+        // floor and the roof and the ground never breaks.
+        height = saturate(height, terrain.minHeight(), terrain.maxHeight());
+
+        if (terrain.terraceStep() > 0) {
+            // Height bands. Quantising the finished height — rather than adding one
+            // more feature on top — is what produces the contour-line look: broad flat
+            // shelves separated by a clean drop of exactly one step, which is how the
+            // stepped lava shelves, the banded moon dust and the layered sand terraces
+            // read. Everything downstream (surface, caves, structures, the height probe)
+            // goes through this same method, so they all agree where the ground is.
+            // The bands are measured up from the floor, so the lowest shelf rests on the
+            // floor instead of being stranded below it.
+            double floor = terrain.minHeight();
+            height = floor
+                    + Math.floor((height - floor) / terrain.terraceStep()) * terrain.terraceStep();
+        }
+
+        // Both ends of saturate() are approached but never reached, so this can only ever
+        // be a guard against a pathological preset rather than part of the shaping.
         return Math.max(terrain.minHeight(), Math.min(terrain.maxHeight(), height));
+    }
+
+    /**
+     * The height band either end of the window is compressed over. A soft clip needs a
+     * band to work in: make it too small and the ground piles up into something flat, too
+     * large and ordinary terrain near the floor loses its shape for no reason.
+     */
+    private static final double CLAMP_BAND = 6.0;
+
+    /**
+     * A smooth version of {@code clamp(height, floor, roof)}.
+     * <p>
+     * Monotone and continuous, and equal to {@code height} for everything comfortably
+     * inside the window — so a planet whose sum already fits is not touched at all. What
+     * would have been clipped is instead compressed into the last few blocks beside the
+     * floor and the roof, and both are approached asymptotically rather than landed on,
+     * which is what keeps the ground from ever becoming a flat plane.
+     */
+    private static double saturate(double height, int floor, int roof) {
+        double band = Math.min(CLAMP_BAND, (roof - floor) / 4.0);
+        if (band <= 0) {
+            return floor;
+        }
+        double aboveFloor = floor + band * softplus((height - floor) / band);
+        return roof - band * softplus((roof - aboveFloor) / band);
+    }
+
+    /** {@code log(1 + e^x)}, written so a large x cannot overflow. */
+    private static double softplus(double x) {
+        return x > 30 ? x : Math.log1p(Math.exp(x));
     }
 
     /** A soft, shaped feature: mountains and valleys both read this. */

@@ -111,6 +111,17 @@ public record PlanetProfile(
      * @param required whether the client must accept it
      * @param prompt   the message shown when offering it
      */
+    /**
+     * The same planet with a different terrain shape. The planet designer layers
+     * filter presets onto a baseline profile this way, so the rest of the profile
+     * (biomes, caves, palette, atmosphere) is carried over untouched.
+     */
+    public PlanetProfile withTerrain(TerrainSettings replacement) {
+        return new PlanetProfile(id, displayName, description, icon, style, seed, seedSalt, palette,
+                replacement, biomes, defaultBiome, surface, caves, structures, decorations, atmosphere,
+                layout, features, gameplay, integrations, resourcePack, applyAtmosphere, sourceFile);
+    }
+
     public record ResourcePack(boolean enabled, String url, String sha1, boolean required, String prompt) {
 
         public static ResourcePack none() {

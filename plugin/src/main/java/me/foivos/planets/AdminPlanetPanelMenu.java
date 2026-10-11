@@ -31,7 +31,8 @@ import java.util.Locale;
  *   ┌───────── summary (4) ─────────┐
  *   Enter(10)  Regenerate(12)  Lock(14)  Landing(16)
  *   Icon(19)   Terrain(21)     Structures(23)  Music(24)  Weather(25)
- *   Spawn(29)  Border(31)      Delete(32)  Commands(33)  Dashboard(34)
+ *   Spawn(29)  Confirm(30)*   Border(31)   Delete(32)  Commands(33)  Dashboard(34)
+ *   (* only while the planet is still waiting to be confirmed for /p)
  *   └────────────── Back (40) ──────────────┘
  * </pre>
  */
@@ -55,6 +56,8 @@ public final class AdminPlanetPanelMenu implements InventoryHolder {
     private static final int MUSIC_SLOT = 24;
     private static final int LOBBY_SLOT = 37;
     private static final int BACK_SLOT = 40;
+    /** Shown only while the planet is still waiting to be confirmed for /p. */
+    private static final int CONFIRM_SLOT = 30;
 
     /** A destructive action waiting for its confirmation click. */
     private enum Confirmation { NONE, REGENERATE, DELETE }
@@ -126,6 +129,12 @@ public final class AdminPlanetPanelMenu implements InventoryHolder {
                 } else {
                     confirmation = Confirmation.REGENERATE;
                 }
+            }
+            case CONFIRM_SLOT -> {
+                confirmation = Confirmation.NONE;
+                plugin.confirmPlanet(player, worldName);
+                render();
+                return;
             }
             case DELETE_SLOT -> {
                 if (confirmation == Confirmation.DELETE) {
@@ -200,6 +209,11 @@ public final class AdminPlanetPanelMenu implements InventoryHolder {
     static List<String> commandReference() {
         return List.of(
                 "/planets create <name> [type] [generation] — builds a new world with terrain",
+                "/planets design <planet> — pick the ground and shape it by clicking a menu",
+                "/planets design <planet> <filter>=<preset>... — shape it from the command line",
+                "/planets pending — the planets you created but haven't confirmed yet",
+                "/planets confirm <planet> — publish a new planet to the /p menu",
+                "/planets discard <planet> — throw a new planet away: the world is deleted for good",
                 "/planets preview <generation|end> — look at a generation in a throwaway world",
                 "/planets icon <planet> <material|reset> — set an exact menu icon",
                 "/planets landing <planet> station|random|point — where players land",
@@ -224,6 +238,12 @@ public final class AdminPlanetPanelMenu implements InventoryHolder {
         }
 
         inventory.setItem(SUMMARY_SLOT, summaryItem(planet));
+        if (plugin.isPendingWorld(worldName)) {
+            inventory.setItem(CONFIRM_SLOT, commandItem(Material.LIME_DYE, "Confirm Planet",
+                    "/planets confirm " + worldName,
+                    "This planet is not in /p yet",
+                    "Click to publish it to the /p menu for everyone"));
+        }
         inventory.setItem(ENTER_SLOT, commandItem(Material.ENDER_PEARL, "Enter Planet",
                 "/p " + worldName,
                 "Teleports you to " + worldName + "'s spawn",
@@ -380,6 +400,10 @@ public final class AdminPlanetPanelMenu implements InventoryHolder {
                     .decoration(TextDecoration.ITALIC, false));
             lore.add(Component.text("Type: " + planet.owned().archetypeDisplayName())
                     .color(NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false));
+        }
+        if (plugin.isPendingWorld(worldName)) {
+            lore.add(Component.text("\u23F3 Waiting for confirmation \u2014 hidden from /p")
+                    .color(NamedTextColor.YELLOW).decoration(TextDecoration.ITALIC, false));
         }
         lore.add(Component.text("Terrain: " + PlanetTerrain.describe(planet.terrain()))
                 .color(NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false));

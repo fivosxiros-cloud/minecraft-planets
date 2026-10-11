@@ -45,6 +45,9 @@ public final class CasinoCommand {
             if (sub.equals("reload")) {
                 return reload(sender);
             }
+            if (sub.equals("admin") || sub.equals("manage")) {
+                return admin(sender);
+            }
             if (sub.equals("stats") || sub.equals("record") || sub.equals("stats")) {
                 return stats(sender);
             }
@@ -130,6 +133,25 @@ public final class CasinoCommand {
         return true;
     }
 
+    /**
+     * {@code /casino admin} — the panel that runs the casino: every game
+     * switched on or off, moved about the hub, and the pool edited, all
+     * written straight to config.yml.
+     */
+    private boolean admin(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage(Component.text("Only players can open the casino panel.")
+                    .color(NamedTextColor.RED));
+            return true;
+        }
+        if (!canManage(sender)) {
+            noPermission(player);
+            return true;
+        }
+        casino.plugin().openAdminCasino(player);
+        return true;
+    }
+
     private boolean canManage(CommandSender sender) {
         return sender.hasPermission(RELOAD) || sender.hasPermission(ADMIN) || sender.isOp();
     }
@@ -147,6 +169,7 @@ public final class CasinoCommand {
         line(sender, "/casino", "open the hub of games");
         line(sender, "/casino stats", "your rounds, streaks, prizes and achievements");
         line(sender, "/casino reload", "re-read the casino section of config.yml");
+        line(sender, "/casino admin", "games on and off, slots, icons, the pool");
         line(sender, "/casino info", "what the games are and what they pay");
         line(sender, "/casino jointable <player>", "join a rock-paper-scissors challenge");
         sender.sendMessage(Component.text("Every game is free and pays only in cosmetic prizes.")
@@ -169,6 +192,7 @@ public final class CasinoCommand {
         List<String> options = new ArrayList<>();
         if (sender.hasPermission(RELOAD) || sender.hasPermission(ADMIN)) {
             options.add("reload");
+            options.add("admin");
         }
         if (sender.hasPermission(STATS)) {
             options.add("stats");

@@ -43,6 +43,10 @@ import java.util.function.Consumer;
  * @param distortionFrequency  how quickly that warp changes, per block
  * @param detailStrength       extra small-scale roughness on the final height
  * @param detailFrequency      how small that roughness is
+ * @param terraceStep          height band in blocks: 0 keeps smooth slopes,
+ *                             larger values cut the finished height into flat
+ *                             shelves separated by a clean drop, which is what
+ *                             gives a planet its contour-line look
  */
 public record TerrainSettings(
         int baseHeight,
@@ -63,7 +67,24 @@ public record TerrainSettings(
         double distortionStrength,
         double distortionFrequency,
         double detailStrength,
-        double detailFrequency) {
+        double detailFrequency,
+        double terraceStep) {
+
+    /**
+     * The shape as it was before height bands existed: no terracing. Kept so the
+     * built-in styles and every hand-written profile keep meaning exactly what they
+     * meant — terracing is opt-in, per preset, like every other setting here.
+     */
+    public TerrainSettings(int baseHeight, int minHeight, int maxHeight, int seaLevel, String liquid,
+                          double verticalScale, double horizontalScale, List<Layer> layers,
+                          Feature mountains, Feature valleys, Feature canyons, Feature cliffs,
+                          Feature plateaus, IslandSettings islands,
+                          FloatingIslandSettings floatingIslands, double distortionStrength,
+                          double distortionFrequency, double detailStrength, double detailFrequency) {
+        this(baseHeight, minHeight, maxHeight, seaLevel, liquid, verticalScale, horizontalScale,
+                layers, mountains, valleys, canyons, cliffs, plateaus, islands, floatingIslands,
+                distortionStrength, distortionFrequency, detailStrength, detailFrequency, 0);
+    }
 
     /** A named noise layer of the height stack. */
     public record Layer(String id, NoiseSettings noise) {
@@ -327,6 +348,8 @@ public record TerrainSettings(
                 Math.max(0, section.getDouble("distortion-frequency", section.getDouble("warping-frequency",
                         fallback.distortionFrequency()))),
                 Math.max(0, section.getDouble("detail-strength", fallback.detailStrength())),
-                Math.max(0.001, section.getDouble("detail-frequency", fallback.detailFrequency())));
+                Math.max(0.001, section.getDouble("detail-frequency", fallback.detailFrequency())),
+                Math.max(0, section.getDouble("terrace", section.getDouble("terrace-step",
+                        section.getDouble("terracing", fallback.terraceStep())))));
     }
 }

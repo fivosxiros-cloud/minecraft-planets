@@ -53,13 +53,6 @@ final class ShipPilot {
     private static final long TICK_INTERVAL = 1L;
     /** How far below the ship a pilot may fall before being put back on it. */
     private static final double VOID_LEASH = 60;
-    /**
-     * Blocks a tick the ship covers for each unit of the configured speed. The
-     * config numbers use the same units as {@code Player#setFlySpeed}, where 0.05
-     * is ordinary creative flight (about 10.9 blocks a second), so the boat keeps
-     * the pace the ship has always flown at.
-     */
-    private static final double SPEED_SCALE = 10.89;
     /** Passengers are held in place every tick, so the ride looks smooth. */
     private static final long RIDE_INTERVAL = 1L;
     /** Passengers never steer, so their own flight stays at a walking pace. */
@@ -778,17 +771,19 @@ final class ShipPilot {
             }
             Boat boat = model == null ? null : model.boat();
             if (boat != null) {
-                model.seat(player); // a sneak can lift the pilot out; put them back
+                model.seat(player); // measures the seat once, then keeps the pilot out of it
                 // The void is not a trap: drop out of the sky and the boat comes back.
                 Location mark = space.shipSpawn();
                 if (mark != null && player.getLocation().getY() < mark.getY() - VOID_LEASH) {
+                    // Move the pilot, not the hull: fly() parks the ship under them
+                    // on this same tick, so the two can never come apart.
                     Location back = mark.clone();
                     back.setYaw(player.getLocation().getYaw());
                     back.setPitch(0);
-                    boat.setVelocity(new Vector());
-                    boat.teleport(back);
+                    player.teleport(back);
+                    player.setVelocity(new Vector());
                 }
-                fly(player, boat); // the throttle, the steering and the hull's heading
+                fly(player, boat, model); // the pace, the hold and the hull's heading
                 model.follow();    // the plate and the banner ride with the boat
             } else {
                 // No boat at all: the pilot keeps their own flight until it is back.
@@ -848,79 +843,40 @@ final class ShipPilot {
     // ── The boat ────────────────────────────────────────────────────────
 
     /**
-     * Flies the boat: the pilot's input steers it, the config sets the pace, and
-     * the hull turns to face the way the pilot is looking. The boat's movement
-     * belongs to its first passenger, which is the invisible marker - so the
-     * plugin moves the ship itself, at the pace the config asks for rather than
-     * at a rowboat's own speed.
+     * Flies the ship: the pilot flies, and the hull is parked under them.
      *
-     * <p>The ship is flown by <b>teleporting</b> it one step a tick, not by
-     * setting its velocity. A boat's own physics multiply every velocity it is
-     * handed (its ground friction does not care that it is flying), so a
-     * velocity-driven ship stuttered along at the client — fast, slow, fast —
-     * exactly frame by frame, and its hull snapped rather than turned. A
-     * teleport lands exactly where it should every tick, and with the boat's
-     * teleport duration at one tick ({@code setTeleportDuration(1)}, set in
-     * {@link ShipModel}) the client interpolates the step, which reads as one
-     * smooth glide: exact speed, instant turning, no physics fighting back.
+     * <p>A boat is driven by the player riding it, so while the pilot sat in the
+     * boat their own client kept sending the boat's position every tick and
+     * fought each step the plugin made - which is what left the ship crawling no
+     * matter how high the configured speed was. {@link ShipModel#seat} therefore
+     * seats the pilot once (to measure the seat), then takes them back out and
+     * gives them their own wings. From then on the client's ordinary flight input
+     * moves the pilot, at {@code space.speed} / {@code space.sprint-speed}, and
+     * this method only parks the hull under them: exact pace, full
+     * three-dimensional control (look up to climb), and nothing on either side
+     * fighting the other.
      */
-    private void fly(Player player, Boat boat) {
-        if (landing.containsKey(player.getUniqueId())) {
-            // Docking: the ship holds still - that is what the planet is waiting for.
-            boat.setVelocity(new Vector());
-            return;
-        }
+    private void fly(Player player, Boat boat, ShipModel model) {
+        boolean docking = landing.containsKey(player.getUniqueId());
         Input input = player.getCurrentInput();
         boolean sprinting = input != null && input.isSprint();
-        double speed = sprinting ? space.sprintSpeed() : space.cruiseSpeed();
-        // The pilot's own flight keeps the same pace, for the moment they step off.
-        player.setFlySpeed((float) speed);
-        Vector wish = wish(player, input);
-        Location next;
-        if (wish.lengthSquared() == 0) {
-            // No keys held: the ship holds where it is (without gravity there
-            // is nothing pulling it, and zeroing the velocity keeps it true).
-            next = boat.getLocation();
-        } else {
-            next = boat.getLocation().add(wish.normalize().multiply(speed * SPEED_SCALE));
+        // The pilot's own wings set the pace: they fly the ship rather than ride
+        // it, so every key the client sends works exactly as it does in creative
+        // flight. There is no vehicle input left to lose, and nothing on the client
+        // is steering the boat back, which is what used to keep the ship crawling.
+        // This only holds because ShipModel#seat takes the pilot back OUT of the
+        // boat once it has measured the seat - a rider who stays aboard is moved by
+        // their vehicle, not by their own keys, and the ship goes nowhere.
+        player.setFlySpeed((float) (docking ? 0.0
+                : sprinting ? space.sprintSpeed() : space.cruiseSpeed()));
+        if (docking) {
+            // Docking: the ship holds still - that is what the planet is waiting for.
+            player.setVelocity(new Vector());
         }
-        next.setYaw(player.getLocation().getYaw()); // the hull always faces the pilot's view
-        next.setPitch(0f);
+        Location hull = model.hullFor(player);
+        hull.setYaw(player.getLocation().getYaw()); // the hull always faces the pilot's view
         boat.setVelocity(new Vector()); // the physics engine stays out of the way
-        boat.teleport(next);
-    }
-
-    /** The direction the pilot is asking for, from the keys they are holding. */
-    private Vector wish(Player player, Input input) {
-        Vector wish = new Vector();
-        if (input == null) {
-            return wish;
-        }
-        Vector look = player.getLocation().getDirection();
-        if (input.isForward()) {
-            wish.add(look); // where they look is where the bow points: looking up climbs
-        }
-        if (input.isBackward()) {
-            wish.subtract(look);
-        }
-        if (input.isLeft() || input.isRight()) {
-            Vector level = look.clone().setY(0);
-            if (level.lengthSquared() < 1.0E-4) {
-                level = new Vector(0, 0, 1);
-            }
-            level.normalize();
-            Vector side = new Vector(-level.getZ(), 0, level.getX());
-            if (input.isLeft()) {
-                wish.subtract(side);
-            }
-            if (input.isRight()) {
-                wish.add(side);
-            }
-        }
-        if (input.isJump()) {
-            wish.add(new Vector(0, 1, 0)); // jump climbs straight up
-        }
-        return wish;
+        boat.teleport(hull);
     }
 
     /** Whether the pilot is holding sneak, from the input their client last sent. */

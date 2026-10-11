@@ -10,6 +10,7 @@ import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.inventory.ItemStack;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -46,6 +47,8 @@ public final class CasinoStatsMenu extends CasinoScreenBase {
 
     /** False draws the record, true the prize cabinet. */
     private boolean cabinetPage;
+    /** Which prize each cabinet slot holds, so a click knows what it picked. */
+    private final Map<Integer, String> rewardAtSlot = new HashMap<>();
 
     CasinoStatsMenu(Planets plugin, CasinoManager casino, Player viewer) {
         super(plugin, casino, viewer, casino.size(),
@@ -79,10 +82,15 @@ public final class CasinoStatsMenu extends CasinoScreenBase {
 
     private ItemStack header() {
         CasinoStats stats = stats();
+        List<String> lines = new ArrayList<>();
+        lines.add(stats.name().isBlank() ? "Casino regular" : stats.name());
+        lines.add(stats.played() + " rounds \u00B7 " + stats.totalRewards() + " prizes");
+        CasinoReward trophy = casino().displayReward(viewerId());
+        lines.add(trophy == null
+                ? "Nothing on display \u2014 click a prize in the cabinet"
+                : "Displaying " + trophy.name() + " (" + trophy.rarity().label() + ")");
         return MenuStyle.header(cabinetPage ? "Prize Cabinet" : "Your Record",
-                cabinetPage ? NamedTextColor.GOLD : NamedTextColor.AQUA,
-                List.of(stats.name().isBlank() ? "Casino regular" : stats.name(),
-                        stats.played() + " rounds \u00B7 " + stats.totalRewards() + " prizes"));
+                cabinetPage ? NamedTextColor.GOLD : NamedTextColor.AQUA, lines);
     }
 
     private void drawRecord() {
@@ -110,10 +118,17 @@ public final class CasinoStatsMenu extends CasinoScreenBase {
                         grey(casino().canSpinToday(viewer()) ? "Ready now"
                                 : "Next in " + casino().nextResetIn()))));
 
-        set(PRIZES_SLOT, statItem(Material.CHEST, "\uD83C\uDF81 Prizes Collected",
-                List.of(grey(stats.totalRewards() + " in total"),
-                        grey(stats.rewards().size() + " different ones"),
-                        grey("Nothing here is tradeable"))));
+        List<Component> prizeLore = new ArrayList<>();
+        prizeLore.add(grey(stats.totalRewards() + " in total"));
+        prizeLore.add(grey(stats.rewards().size() + " different ones"));
+        prizeLore.add(grey("Nothing here is tradeable"));
+        CasinoReward trophy = casino().displayReward(viewerId());
+        prizeLore.add(grey(""));
+        prizeLore.add(trophy == null
+                ? grey("Nothing on display \u2014 open the cabinet")
+                : CasinoText.legacy("&6\uD83C\uDF96 " + trophy.name(),
+                        trophy.rarity().colour()));
+        set(PRIZES_SLOT, statItem(Material.CHEST, "\uD83C\uDF81 Prizes Collected", prizeLore));
 
         List<CasinoAchievement> unlocked = casino().achievements();
         int index = 0;
@@ -151,6 +166,7 @@ public final class CasinoStatsMenu extends CasinoScreenBase {
     }
 
     private void drawCabinet() {
+        rewardAtSlot.clear();
         Map<CasinoReward, Integer> cabinet = casino().cabinet(viewerId());
         int slot = 0;
         for (Map.Entry<CasinoReward, Integer> entry : cabinet.entrySet()) {
@@ -165,13 +181,25 @@ public final class CasinoStatsMenu extends CasinoScreenBase {
                 lore.add(grey(line));
             }
             lore.add(grey(""));
+            boolean shown = reward.id().equalsIgnoreCase(stats().display());
             lore.add(owned > 0
                     ? CasinoText.legacy("&aCollected \u00D7" + owned, NamedTextColor.GREEN)
                     : grey("Not collected yet"));
             if (!reward.rollable()) {
                 lore.add(grey("No longer in the pool"));
             }
-            set(CABINET_SLOTS[slot++], item(reward.icon(),
+            if (shown) {
+                lore.add(CasinoText.legacy("&6\uD83C\uDF96 On display", NamedTextColor.GOLD));
+            }
+            if (owned > 0 && casino().cosmeticsEnabled()) {
+                lore.add(grey(""));
+                lore.add(shown
+                        ? CasinoText.legacy("&e\u2794 Click to put it away", NamedTextColor.YELLOW)
+                        : CasinoText.legacy("&e\u2794 Click to put it on display", NamedTextColor.YELLOW));
+            }
+            int at = CABINET_SLOTS[slot++];
+            rewardAtSlot.put(at, reward.id());
+            set(at, item(reward.icon(),
                     CasinoText.legacy(reward.name(), owned > 0
                             ? reward.rarity().colour() : NamedTextColor.DARK_GRAY),
                     lore));
@@ -193,6 +221,14 @@ public final class CasinoStatsMenu extends CasinoScreenBase {
         int slot = clickedSlot(event);
         Player player = viewer();
         if (slot < 0 || player == null) {
+            return;
+        }
+        if (cabinetPage && rewardAtSlot.containsKey(slot)) {
+            if (casino().toggleDisplay(player, rewardAtSlot.get(slot))) {
+                render();
+            } else {
+                CasinoFeedback.deny(player);
+            }
             return;
         }
         switch (slot) {

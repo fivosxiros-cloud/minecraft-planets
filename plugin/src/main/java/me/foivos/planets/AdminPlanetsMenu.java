@@ -37,6 +37,7 @@ public final class AdminPlanetsMenu implements InventoryHolder {
     private static final int DASHBOARD_SLOT = 39;
     private static final int INFO_SLOT = 40;
     private static final int NEXT_SLOT = 43;
+    private static final int DESIGN_SLOT = 41;
 
     private final Planets plugin;
     private final Player viewer;
@@ -86,6 +87,10 @@ public final class AdminPlanetsMenu implements InventoryHolder {
             plugin.openAdminDashboard(player);
             return;
         }
+        if (slot == DESIGN_SLOT) {
+            plugin.promptDesignName(player);
+            return;
+        }
 
         Planets.AdminPlanet planet = planetAt(slot);
         if (planet == null) {
@@ -127,6 +132,7 @@ public final class AdminPlanetsMenu implements InventoryHolder {
                 page < maxPage() ? NamedTextColor.GREEN : NamedTextColor.DARK_GRAY));
         inventory.setItem(INFO_SLOT, infoItem());
         inventory.setItem(DASHBOARD_SLOT, dashboardItem());
+        inventory.setItem(DESIGN_SLOT, designItem());
     }
 
     private static ItemStack dashboardItem() {
@@ -137,6 +143,25 @@ public final class AdminPlanetsMenu implements InventoryHolder {
         meta.lore(List.of(
                 Component.text("Server-wide counts, block usage and cleanup")
                         .color(NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false)));
+        item.setItemMeta(meta);
+        return item;
+    }
+
+    /** The one button that does not act on an existing planet: it designs a new one. */
+    private static ItemStack designItem() {
+        ItemStack item = new ItemStack(Material.CARTOGRAPHY_TABLE);
+        ItemMeta meta = item.getItemMeta();
+        meta.displayName(Component.text("\uD83C\uDF9B Design a planet").color(NamedTextColor.LIGHT_PURPLE)
+                .decoration(TextDecoration.ITALIC, false));
+        meta.lore(List.of(
+                Component.text("Pick the ground and shape it by clicking")
+                        .color(NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
+                Component.text("filters and presets instead of typing")
+                        .color(NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
+                Component.text("filter=preset on the command line.")
+                        .color(NamedTextColor.GRAY).decoration(TextDecoration.ITALIC, false),
+                Component.text("Asks for the new planet's name in chat.")
+                        .color(NamedTextColor.DARK_GRAY).decoration(TextDecoration.ITALIC, false)));
         item.setItemMeta(meta);
         return item;
     }

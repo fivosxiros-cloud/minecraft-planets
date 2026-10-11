@@ -45,7 +45,9 @@ import org.bukkit.event.world.WorldLoadEvent;
 import io.papermc.paper.event.player.AsyncChatEvent;
 import me.foivos.planets.api.PlanetariumHudService;
 import me.foivos.planets.features.PlanetFeatureManager;
+import me.foivos.planets.worldgen.GenerationStyle;
 import me.foivos.planets.worldgen.PlanetChunkGenerator;
+import me.foivos.planets.worldgen.PlanetDesign;
 import me.foivos.planets.worldgen.PlanetGeneration;
 import me.foivos.planets.worldgen.PlanetProfile;
 import me.foivos.planets.casino.CasinoCommand;
@@ -62,6 +64,7 @@ import org.bukkit.scheduler.BukkitTask;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.File;
+import java.io.Reader;
 import java.util.Date;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -121,6 +124,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     /** A playlist whose new name is waiting in chat (the /music rename prompt). */
     private final Map<UUID, String> pendingPlaylistRenames = new HashMap<>();
+
+    /** Players whose next chat message names the planet they want to design. */
+    private final Set<UUID> pendingDesignNames = new HashSet<>();
 
     /** A pending /home prompt: what the player's next chat message means. */
     private record HomePrompt(boolean rename, String homeName, Location location) {
@@ -308,10 +314,21 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     /** The per-planet experience layer (resource packs, client hooks, events). */
     private PlanetFeatureManager features;
 
+    /** The planet designer's filters from config.yml, read on every reload. */
+    private List<PlanetDesign.Filter> designFilters = List.of();
+
+    /**
+     * Bumped whenever the designer ships new filters or ready-made designs: a config.yml
+     * seeded at a lower version is merged again, so new content does reach a server that
+     * updated, without ever overwriting what the admin changed.
+     */
+    private static final int DESIGN_SEED_VERSION = 2;
+
     @Override
     public void onEnable() {
         saveDefaultConfig();
         seedDefaultLobbies();
+        seedDesignFilters();
         loadHudModes();
         PlanetTravel.init(this);
         PlanetTravel.loadConfig(getConfig());
@@ -327,6 +344,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         // builds the terrain, the feature layer runs the per-planet experience.
         this.generation = new PlanetGeneration(this);
         generation.reload();
+        loadDesigns();
         this.features = new PlanetFeatureManager(this, generation.registry());
         features.start();
         getServer().getPluginManager().registerEvents(features, this);
@@ -338,6 +356,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 restoreSpawnLimits(loaded);
             }
         }, 60L);
+        // Unconfirmed planets are swept once the server is up, and then every
+        // five minutes, so a half-finished test world cannot pile up.
+        getServer().getScheduler().runTaskLater(this, this::sweepPendingWorlds, 120L);
+        getServer().getScheduler().runTaskTimer(this, this::sweepPendingWorlds, 6000L, 6000L);
 
         // Initialize the planet ownership manager BEFORE registering guards that read from it.
         this.myPlanetManager = new MyPlanetManager(this);
@@ -569,6 +591,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 } else if (event.getInventory().getHolder() instanceof AdminPlanetPanelMenu menu) {
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof AdminTerrainMenu menu) {
+                    menu.handleClick(event);
+                } else if (event.getInventory().getHolder() instanceof PlanetDesignMenu menu) {
                     menu.handleClick(event);
                 } else if (event.getInventory().getHolder() instanceof AdminMusicMenu menu) {
                     menu.handleClick(event);
@@ -829,6 +853,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 pendingLobbyEdits.remove(quitter);
                 // A half-finished playlist rename goes with the player too.
                 pendingPlaylistRenames.remove(quitter);
+                // …and so does a planet-design name prompt.
+                pendingDesignNames.remove(quitter);
                 // Personal-setting bookkeeping.
                 lastChatAt.remove(quitter);
                 lastMentionAt.remove(quitter);
@@ -1159,6 +1185,22 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     return;
                 }
 
+                // Planet designer prompt: the next chat message is the new planet's name.
+                if (pendingDesignNames.remove(player.getUniqueId())) {
+                    event.setCancelled(true);
+                    String designName = net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer
+                            .plainText().serialize(event.message()).trim();
+                    Bukkit.getScheduler().runTask(Planets.this, () -> {
+                        if (designName.isEmpty() || designName.equalsIgnoreCase("cancel")) {
+                            player.sendMessage(Component.text("Planet design cancelled.")
+                                    .color(NamedTextColor.GRAY));
+                            return;
+                        }
+                        openPlanetDesigner(player, designName);
+                    });
+                    return;
+                }
+
                 // Handle sell prompt first
                 String sellWorldName = pendingSells.remove(player.getUniqueId());
                 if (sellWorldName != null) {
@@ -1454,6 +1496,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             applyWorldBordersToAllPlanets();
             if (generation != null) {
                 generation.reload();
+                loadDesigns();
             }
             if (features != null) {
                 features.reload();
@@ -1603,6 +1646,27 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
         if (args.length > 0 && args[0].equalsIgnoreCase("world")) {
             setWorldProperty(player, args);
+            return true;
+        }
+        // /planets design <name> <filter>=<preset>... — shape a planet by hand.
+        if (args.length > 0 && args[0].equalsIgnoreCase("design")) {
+            createDesignedPlanet(player, args);
+            return true;
+        }
+        // Publishing the planets an admin created but hasn't confirmed yet.
+        if (args.length > 0 && (args[0].equalsIgnoreCase("confirm") || args[0].equalsIgnoreCase("discard"))
+                && (player.hasPermission("planets.create") || player.hasPermission("planets.world"))) {
+            String pendingName = args.length >= 2 ? args[1] : "";
+            if (args[0].equalsIgnoreCase("confirm")) {
+                confirmPlanet(player, pendingName);
+            } else {
+                discardPlanet(player, pendingName);
+            }
+            return true;
+        }
+        if (args.length > 0 && args[0].equalsIgnoreCase("pending")
+                && (player.hasPermission("planets.create") || player.hasPermission("planets.world"))) {
+            listPending(player);
             return true;
         }
         if (args.length > 0 && args[0].equalsIgnoreCase("portals")) {
@@ -1966,6 +2030,26 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             return List.of(); // the world name is free text
         }
 
+        if ((args[0].equalsIgnoreCase("confirm") || args[0].equalsIgnoreCase("discard"))
+                && player.hasPermission("planets.create")
+                && (args.length == 1 || args.length == 2)) {
+            return match(pendingWorlds(), prefix);
+        }
+
+        if (args[0].equalsIgnoreCase("design")
+                && (player.hasPermission("planets.create") || player.hasPermission("planets.world"))) {
+            if (args.length < 3) {
+                return List.of(); // the world name is free text
+            }
+            List<String> options = new ArrayList<>();
+            for (PlanetDesign.Filter filter : designFilters) {
+                for (String presetId : filter.presetIds()) {
+                    options.add(filter.id() + "=" + presetId);
+                }
+            }
+            return match(options, prefix);
+        }
+
         // Anything else is the start of a planet name, which may hold spaces.
         return planetNameContinuations(player, args, prefix);
     }
@@ -1985,7 +2069,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         if (player.isOp()) {
             for (String sub : List.of("create", "preview", "icon", "landing", "setlanding",
                     "delete", "lock", "world", "portals", "renameprice",
-                    "list", "profile", "debug")) {
+                    "list", "profile", "debug", "confirm", "discard", "pending", "design")) {
                 add(suggestions, prefix, sub);
             }
         }
@@ -2466,6 +2550,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             saveConfigQuietly();
             PlanetTravel.loadConfig(getConfig());
         }
+        // A brand-new planet stays out of /p until its creator confirms it.
+        markPending(name);
+        announcePending(player, name);
         // Set the world border for the new planet.
         setPlanetWorldBorder(name);
         player.sendMessage(Component.text("Planet ").color(NamedTextColor.GREEN)
@@ -2526,6 +2613,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         generation.applyIdentity(worldName, profile, getConfig());
         recordGeneratorInBukkitYml(worldName);
         saveConfigQuietly();
+        // A brand-new planet stays out of /p until its creator confirms it.
+        markPending(worldName);
+        announcePending(player, worldName);
         PlanetTravel.loadConfig(getConfig());
         setPlanetWorldBorder(worldName);
         player.teleportAsync(world.getSpawnLocation());
@@ -2606,7 +2696,20 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             return PlanetTerrain.voidSpec();
         }
         PlanetArchetypes.Archetype archetype = PlanetArchetypes.byId(id);
-        return archetype == null ? null : archetype.terrain();
+        if (archetype != null) {
+            return archetype.terrain();
+        }
+        // Curated terrain looks come last: a built-in generation or a preset with
+        // the same id always wins, so adding a look can never change a planet
+        // that already relied on that id.
+        ConfigurationSection look = terrainLook(id);
+        if (look != null) {
+            PlanetTerrain.Spec spec = specFromConfig(look);
+            if (spec != null && !spec.isVoid()) {
+                return spec;
+            }
+        }
+        return null;
     }
 
     /** Whether {@code id} is a generation this server can build (preset or archetype). */
@@ -2629,6 +2732,11 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         ConfigurationSection presets = getConfig().getConfigurationSection("generation-presets");
         if (presets != null) {
             ids.addAll(presets.getKeys(false));
+        }
+        for (String lookId : orderedLookIds()) {
+            if (!containsIgnoreCase(ids, lookId)) {
+                ids.add(lookId);
+            }
         }
         return ids;
     }
@@ -2750,6 +2858,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         PlanetTerrain.save(getConfig(), name, spec);
         saveConfigQuietly();
         PlanetTravel.loadConfig(getConfig());
+        // A brand-new planet stays out of /p until its creator confirms it.
+        markPending(name);
+        announcePending(player, name);
         // Set the world border for the new planet.
         setPlanetWorldBorder(name);
         PlanetTerrain.ensureFloor(Bukkit.getWorld(name), name, spec);
@@ -2782,6 +2893,223 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             }
         }
         return false;
+    }
+
+    // ── Pending planets (created by an admin, not published yet) ─────────
+
+    /** The worlds waiting to be confirmed, in the order they were created. */
+    List<String> pendingWorlds() {
+        ConfigurationSection section = getConfig().getConfigurationSection("pending-worlds");
+        return section == null ? List.of() : new ArrayList<>(section.getKeys(false));
+    }
+
+    /**
+     * Whether a world is waiting for its creator to publish it. A pending world
+     * is kept out of the /p menu entirely until "/planets confirm" adds it, and
+     * is deleted for good if it is never confirmed.
+     */
+    boolean isPendingWorld(String worldName) {
+        return worldName != null && containsIgnoreCase(pendingWorlds(), worldName);
+    }
+
+    /** When a pending world was created, or {@code 0} when it was never recorded. */
+    private long pendingSince(String worldName) {
+        ConfigurationSection section = getConfig().getConfigurationSection("pending-worlds");
+        return section == null ? 0L : section.getLong(worldName, 0L);
+    }
+
+    /** Marks a freshly created world as pending, so it stays out of the /p menu. */
+    private void markPending(String worldName) {
+        if (worldName == null || worldName.isBlank() || isPendingWorld(worldName)) {
+            return;
+        }
+        getConfig().set("pending-worlds." + worldName, System.currentTimeMillis());
+        saveConfigQuietly();
+    }
+
+    /** Tells the creator of a new planet how to publish or throw it away. */
+    private void announcePending(Player player, String worldName) {
+        player.sendMessage(Component.text("\u23F3 ").color(NamedTextColor.YELLOW)
+                .append(Component.text(worldName).color(NamedTextColor.YELLOW))
+                .append(Component.text(" is not in /p yet — it is waiting for your confirmation.")
+                        .color(NamedTextColor.YELLOW)));
+        player.sendMessage(Component.text("Publish it with ").color(NamedTextColor.GRAY)
+                .append(Component.text("/planets confirm " + worldName).color(NamedTextColor.GREEN))
+                .append(Component.text(", or throw it away for good with ").color(NamedTextColor.GRAY))
+                .append(Component.text("/planets discard " + worldName).color(NamedTextColor.RED))
+                .append(Component.text(". Unconfirmed planets are deleted automatically.").color(NamedTextColor.GRAY)));
+    }
+
+    /**
+     * Resolves a name the admin typed against the pending worlds, so
+     * "/planets confirm" works for a name with spaces or the wrong case.
+     */
+    private String pendingMatch(String query) {
+        List<String> pending = pendingWorlds();
+        if (pending.isEmpty()) {
+            return null;
+        }
+        if (query == null || query.isBlank()) {
+            return pending.size() == 1 ? pending.get(0) : null;
+        }
+        String spaced = query.replace(' ', '_');
+        for (String name : pending) {
+            if (name.equalsIgnoreCase(query) || name.equalsIgnoreCase(spaced)) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    /** How long an unconfirmed planet is kept, in hours ({@code 0} = forever). */
+    private long pendingExpiryHours() {
+        return Math.max(0L, getConfig().getLong("pending-planets.expire-hours", 24L));
+    }
+
+    /**
+     * Publishes a pending planet: from now on it is an ordinary planet in /p.
+     * Without a name it works on the only pending world, when there is one.
+     */
+    boolean confirmPlanet(Player actor, String worldName) {
+        String target = pendingMatch(worldName);
+        if (target == null) {
+            if (pendingWorlds().isEmpty()) {
+                actor.sendMessage(Component.text("No planet is waiting to be confirmed — every created planet is live.")
+                        .color(NamedTextColor.GRAY));
+            } else if (worldName == null || worldName.isBlank()) {
+                actor.sendMessage(Component.text("Say which one: /planets confirm <world>")
+                        .color(NamedTextColor.YELLOW));
+                listPending(actor);
+            } else {
+                actor.sendMessage(Component.text("No pending planet called '").color(NamedTextColor.RED)
+                        .append(Component.text(worldName).color(NamedTextColor.YELLOW))
+                        .append(Component.text("'.").color(NamedTextColor.RED)));
+                listPending(actor);
+            }
+            return false;
+        }
+        getConfig().set("pending-worlds." + target, null);
+        saveConfigQuietly();
+        PlanetTravel.loadConfig(getConfig());
+        actor.sendMessage(Component.text("\u2714 ").color(NamedTextColor.GREEN)
+                .append(Component.text(target).color(NamedTextColor.YELLOW))
+                .append(Component.text(" is published — it now shows in /p for everyone.")
+                        .color(NamedTextColor.GREEN)));
+        getLogger().info(actor.getName() + " confirmed the planet '" + target + "'.");
+        return true;
+    }
+
+    /**
+     * Throws a pending planet away permanently: the world, its folder, its
+     * Multiverse entry and every per-world setting are removed, and the name is
+     * retired so it can never be handed out again.
+     */
+    boolean discardPlanet(Player actor, String worldName) {
+        String target = pendingMatch(worldName);
+        if (target == null) {
+            if (pendingWorlds().isEmpty()) {
+                actor.sendMessage(Component.text("No planet is waiting to be confirmed.")
+                        .color(NamedTextColor.GRAY));
+            } else if (worldName == null || worldName.isBlank()) {
+                actor.sendMessage(Component.text("Say which one: /planets discard <world>")
+                        .color(NamedTextColor.YELLOW));
+                listPending(actor);
+            } else {
+                actor.sendMessage(Component.text("No pending planet called '").color(NamedTextColor.RED)
+                        .append(Component.text(worldName).color(NamedTextColor.YELLOW))
+                        .append(Component.text("'.").color(NamedTextColor.RED)));
+                listPending(actor);
+            }
+            return false;
+        }
+        deletePendingWorld(target);
+        actor.sendMessage(Component.text("\uD83D\uDDD1 Discarded ").color(NamedTextColor.GREEN)
+                .append(Component.text(target).color(NamedTextColor.YELLOW))
+                .append(Component.text(" — the world and its folder are gone for good and the name is retired.")
+                        .color(NamedTextColor.GREEN)));
+        getLogger().info(actor.getName() + " discarded the unconfirmed planet '" + target + "'.");
+        return true;
+    }
+
+    /** Deletes a pending world and forgets everything recorded about it. */
+    private void deletePendingWorld(String worldName) {
+        deleteWorldNow(worldName);
+        clearWorldConfig(worldName);
+        getConfig().set("pending-worlds." + worldName, null);
+        rememberDeletedWorld(worldName);
+        if (generation != null) {
+            generation.registry().unbind(worldName, getConfig());
+        }
+        if (myPlanetManager != null) {
+            myPlanetManager.remove(worldName);
+            myPlanetManager.retire(worldName);
+        }
+        saveConfigQuietly();
+        PlanetTravel.loadConfig(getConfig());
+        PlanetEffects.loadConfig(getConfig());
+        environment.loadConfig(getConfig());
+    }
+
+    /**
+     * Deletes every pending planet that was never confirmed within
+     * {@code pending-planets.expire-hours}. Runs shortly after startup and then
+     * every few minutes, so an abandoned test planet cannot pile up. The name
+     * stays retired, exactly as if an admin had run "/planets discard".
+     */
+    void sweepPendingWorlds() {
+        if (environment == null) {
+            return; // startup ran ahead of the rest of the plugin
+        }
+        long hours = pendingExpiryHours();
+        if (hours <= 0) {
+            return;
+        }
+        long cutoff = System.currentTimeMillis() - hours * 3_600_000L;
+        for (String worldName : pendingWorlds()) {
+            if (pendingSince(worldName) > cutoff) {
+                continue;
+            }
+            getLogger().info("Removing the unconfirmed planet '" + worldName + "' — it was not confirmed within "
+                    + hours + " hour(s).");
+            deletePendingWorld(worldName);
+        }
+    }
+
+    /** Lists the planets waiting for confirmation, with their age. */
+    void listPending(CommandSender sender) {
+        List<String> pending = pendingWorlds();
+        if (pending.isEmpty()) {
+            sender.sendMessage(Component.text("No planet is waiting to be confirmed.")
+                    .color(NamedTextColor.GRAY));
+            return;
+        }
+        long hours = pendingExpiryHours();
+        sender.sendMessage(Component.text("\u23F3 Waiting for confirmation (" + pending.size() + "):")
+                .color(NamedTextColor.YELLOW));
+        for (String worldName : pending) {
+            sender.sendMessage(Component.text("  " + worldName).color(NamedTextColor.WHITE)
+                    .append(Component.text(" — created " + pendingAge(pendingSince(worldName))
+                            + (hours > 0 ? ", deleted after " + hours + "h unconfirmed" : ""))
+                            .color(NamedTextColor.GRAY)));
+        }
+        sender.sendMessage(Component.text("Publish with ").color(NamedTextColor.GRAY)
+                .append(Component.text("/planets confirm <world>").color(NamedTextColor.GREEN))
+                .append(Component.text(", delete with ").color(NamedTextColor.GRAY))
+                .append(Component.text("/planets discard <world>").color(NamedTextColor.RED))
+                .append(Component.text(".").color(NamedTextColor.GRAY)));
+    }
+
+    /** {@code 12m ago} / {@code 3h ago} / {@code 2d ago}, for the pending list. */
+    private static String pendingAge(long since) {
+        if (since <= 0) {
+            return "an unknown time ago";
+        }
+        long minutes = Math.max(0L, System.currentTimeMillis() - since) / 60_000L;
+        if (minutes < 60) {
+            return minutes + "m ago";
+        }
+        long hours = minutes / 60L;
+        return hours < 24 ? hours + "h ago" : (hours / 24L) + "d ago";
     }
 
     /**
@@ -5599,6 +5927,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 if (isCreatedLobbyWorld(planet.worldName())) {
                     continue; // worlds generated by /lobby create belong to lobbies, not planets
                 }
+                if (isPendingWorld(planet.worldName())) {
+                    continue; // created but not confirmed yet — /planets confirm publishes it
+                }
                 if (myPlanetManager.get(planet.worldName()) != null) {
                     continue; // player-owned planets are managed through /myp, not the public /p menu
                 }
@@ -7359,6 +7690,358 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         pushHudDefault();
     }
 
+    // ── The planet designer (config.yml "planet-design") ─────────────────
+
+    /** Logs one problem with the planet designer's config. */
+    private void warnAboutDesign(String message) {
+        getLogger().warning("[planet-design] " + message);
+    }
+
+    /**
+     * Reads the planet designer from config.yml and registers its designs — plus
+     * every planet built with {@code /planets design} — with the generation
+     * registry, so they behave exactly like a {@code planets/*.yml} profile:
+     * {@code /planets create <name> <design>} builds them, and the world's
+     * generator can reattach after a restart.
+     * <p>
+     * Must run after {@link PlanetGeneration#reload()} every time, because a
+     * reload rebuilds the profile map from disk and would otherwise drop them.
+     */
+    /**
+     * Gives a config.yml that predates the planet designer the filters it needs.
+     * <p>
+     * Same one-time seed as the lobbies: a server updating to this build keeps its
+     * own config.yml, which holds none of the designer's sections, and Bukkit's
+     * defaults do not survive the nested lookups the designer makes — so without
+     * this every "/planets design" answers "no terrain filters are configured". The
+     * flag means removing the section afterwards is respected.
+     */
+    /**
+     * Gives a config.yml that predates the planet designer the sections it needs, and adds
+     * whatever a later build has since shipped.
+     * <p>
+     * A server updating to this build keeps its own config.yml, which holds none of the
+     * designer's sections, and Bukkit's defaults do not survive the nested lookups the
+     * designer makes — so without this every "/planets design" answers "no terrain filters
+     * are configured". Only keys the file is actually missing are written, so an admin's own
+     * edits and their designed planets are never touched.
+     */
+    private void seedDesignFilters() {
+        if (getConfig().getInt("planet-design-seeded", 0) >= DESIGN_SEED_VERSION) {
+            return;
+        }
+        File file = new File(getDataFolder(), "config.yml");
+        YamlConfiguration onDisk = YamlConfiguration.loadConfiguration(file);
+        try (Reader shipped = getTextResource("config.yml")) {
+            if (shipped != null) {
+                YamlConfiguration defaults = new YamlConfiguration();
+                defaults.load(shipped);
+                int written = PlanetDesign.seed(getConfig(), defaults, onDisk);
+                if (written > 0) {
+                    getLogger().info("[planets] Added " + written + " setting(s) for the planet "
+                            + "designer to config.yml.");
+                }
+            }
+        } catch (Exception ex) {
+            // A migration that fails must not stop the plugin from enabling.
+            getLogger().warning("[planets] Could not add the planet designer's settings "
+                    + "to config.yml: " + ex.getMessage());
+        }
+        getConfig().set("planet-design-seeded", DESIGN_SEED_VERSION);
+        saveConfigQuietly();
+    }
+
+    private void loadDesigns() {
+        if (generation == null) {
+            return;
+        }
+        designFilters = PlanetDesign.load(getConfig(), this::warnAboutDesign);
+        if (designFilters.isEmpty()) {
+            return;
+        }
+        getLogger().info("[planets] Planet designer ready with " + designFilters.size()
+                + " filter(s) and "
+                + PlanetDesign.designs(getConfig(), designFilters, this::warnAboutDesign).size()
+                + " ready-made design(s).");
+        Map<String, PlanetProfile> profiles = new LinkedHashMap<>();
+        profiles.putAll(PlanetDesign.designs(getConfig(), designFilters, this::warnAboutDesign));
+        profiles.putAll(PlanetDesign.saved(getConfig(), designFilters, this::warnAboutDesign));
+        generation.registry().registerAll(profiles);
+    }
+
+    /**
+     * "/planets design &lt;name&gt; &lt;filter=preset&gt;..." — builds a planet whose
+     * shape is chosen filter by filter instead of taken from a preset list. The
+     * combination is written to {@code planet-design.designed} and registered as a
+     * profile, so the world keeps its terrain after a restart and can be
+     * regenerated like any other planet.
+     */
+    private void createDesignedPlanet(Player player, String[] args) {
+        if (!canDesign(player)) {
+            player.sendMessage(Component.text("You don't have permission to design planets.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        if (designFilters.isEmpty()) {
+            player.sendMessage(Component.text("No terrain filters are configured — add them under ")
+                    .color(NamedTextColor.RED)
+                    .append(Component.text("planet-design.filters").color(NamedTextColor.YELLOW))
+                    .append(Component.text(" in config.yml, then /planets reload.").color(NamedTextColor.RED)));
+            return;
+        }
+        if (args.length < 3) {
+            // Only a name was given: open the click-through designer for it.
+            if (args.length == 2 && !args[1].isBlank()) {
+                openPlanetDesigner(player, args[1]);
+                return;
+            }
+            player.sendMessage(Component.text("Usage: /planets design <name> [<filter>=<preset>...]")
+                    .color(NamedTextColor.YELLOW));
+            player.sendMessage(Component.text("Leave the filters out to click them in a menu instead.")
+                    .color(NamedTextColor.GRAY));
+            for (PlanetDesign.Filter filter : designFilters) {
+                player.sendMessage(Component.text("  " + filter.id() + " = "
+                                + String.join(", ", filter.presetIds()))
+                        .color(NamedTextColor.GREEN)
+                        .append(Component.text(" — " + filter.description()).color(NamedTextColor.GRAY)));
+            }
+            return;
+        }
+        String name = args[1];
+        List<String> problems = new ArrayList<>();
+        Map<String, String> choices = PlanetDesign.parseChoices(
+                Arrays.copyOfRange(args, 2, args.length), designFilters, problems);
+        for (String problem : problems) {
+            player.sendMessage(Component.text("\u2022 " + problem).color(NamedTextColor.RED));
+        }
+        if (choices.isEmpty()) {
+            player.sendMessage(Component.text("None of those filters were usable — nothing was created.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        createDesignedPlanet(player, name, choices);
+    }
+
+    /**
+     * Creates (and remembers) a planet from a chosen set of filter presets. The
+     * command and the designer menu both end up here, so a planet shaped by
+     * clicking and one shaped by typing are built by exactly the same code.
+     */
+    void createDesignedPlanet(Player player, String name, Map<String, String> choices) {
+        if (!canDesign(player)) {
+            player.sendMessage(Component.text("You don't have permission to design planets.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        if (designFilters.isEmpty()) {
+            player.sendMessage(Component.text("No terrain filters are configured — add them under ")
+                    .color(NamedTextColor.RED)
+                    .append(Component.text("planet-design.filters").color(NamedTextColor.YELLOW))
+                    .append(Component.text(" in config.yml, then /planets reload.").color(NamedTextColor.RED)));
+            return;
+        }
+        if (name == null || name.isBlank()) {
+            player.sendMessage(Component.text("Pick a name for the planet first.").color(NamedTextColor.RED));
+            return;
+        }
+        if (choices.isEmpty()) {
+            player.sendMessage(Component.text("Pick at least one filter — a design with no shape is not a planet.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        if (Bukkit.getWorld(name) != null || worldFolderExists(name)) {
+            player.sendMessage(Component.text("A world named '").color(NamedTextColor.RED)
+                    .append(Component.text(name).color(NamedTextColor.YELLOW))
+                    .append(Component.text("' already exists.").color(NamedTextColor.RED)));
+            return;
+        }
+        GenerationStyle style = PlanetDesign.baselineStyle(getConfig(), this::warnAboutDesign);
+        String id = PlanetDesign.idFor(style, choices, designFilters);
+        List<String> warnings = new ArrayList<>();
+        PlanetProfile profile = PlanetDesign.build(id, name, PlanetDesign.describe(designFilters, choices),
+                null, style, designFilters, choices, warnings::add);
+        for (String warning : warnings) {
+            warnAboutDesign(warning);
+        }
+        // Remember the combination: the world needs its shape again after a restart.
+        ConfigurationSection remembered = getConfig().createSection("planet-design.designed." + id);
+        remembered.set("style", style.name().toLowerCase(Locale.ROOT));
+        remembered.set("display-name", name);
+        remembered.set("filters", choices);
+        saveConfigQuietly();
+        generation.registry().registerAll(Map.of(id, profile));
+        player.sendMessage(Component.text("Designing '").color(NamedTextColor.GRAY)
+                .append(Component.text(name).color(NamedTextColor.YELLOW))
+                .append(Component.text("' — ").color(NamedTextColor.GRAY))
+                .append(Component.text(PlanetDesign.describe(designFilters, choices))
+                        .color(NamedTextColor.YELLOW)));
+        getLogger().info(player.getName() + " designed planet '" + name + "' as " + id + " ("
+                + PlanetDesign.describe(designFilters, choices) + ").");
+        createProfilePlanet(player, name, profile);
+    }
+
+    /** Whether this player may design planets — the same gate as {@code /planets create}. */
+    boolean canDesign(Player player) {
+        return player.hasPermission("planets.create") || player.hasPermission("planets.world");
+    }
+
+    /** The planet designer's filters from config.yml, for the designer menu. */
+    List<PlanetDesign.Filter> designFilters() {
+        return designFilters;
+    }
+
+    /**
+     * Asks in chat for the name of a planet to design, opened from the admin planet list.
+     * The answer re-enters through the chat listener, which opens the designer menu.
+     */
+    void promptDesignName(Player player) {
+        if (!canDesign(player)) {
+            player.sendMessage(Component.text("You don't have permission to design planets.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        if (designFilters.isEmpty()) {
+            player.sendMessage(Component.text("No terrain filters are configured — add them under ")
+                    .color(NamedTextColor.RED)
+                    .append(Component.text("planet-design.filters").color(NamedTextColor.YELLOW))
+                    .append(Component.text(" in config.yml, then /planets reload.").color(NamedTextColor.RED)));
+            return;
+        }
+        pendingDesignNames.add(player.getUniqueId());
+        player.closeInventory();
+        player.sendMessage(Component.text("\uD83C\uDF9B Type a name for the new planet in chat — ")
+                .color(NamedTextColor.LIGHT_PURPLE)
+                .append(Component.text("the designer menu opens as soon as you send it").color(NamedTextColor.GRAY))
+                .append(Component.text(", or ").color(NamedTextColor.LIGHT_PURPLE))
+                .append(Component.text("cancel").color(NamedTextColor.RED))
+                .append(Component.text(".").color(NamedTextColor.LIGHT_PURPLE)));
+    }
+
+    /** Opens the click-through planet designer for a world that does not exist yet. */
+    void openPlanetDesigner(Player player, String name) {
+        if (!canDesign(player)) {
+            player.sendMessage(Component.text("You don't have permission to design planets.")
+                    .color(NamedTextColor.RED));
+            return;
+        }
+        if (designFilters.isEmpty()) {
+            player.sendMessage(Component.text("No terrain filters are configured — add them under ")
+                    .color(NamedTextColor.RED)
+                    .append(Component.text("planet-design.filters").color(NamedTextColor.YELLOW))
+                    .append(Component.text(" in config.yml, then /planets reload.").color(NamedTextColor.RED)));
+            return;
+        }
+        if (name == null || name.isBlank()) {
+            player.sendMessage(Component.text("Say what to call it: /planets design <name>")
+                    .color(NamedTextColor.YELLOW));
+            return;
+        }
+        if (Bukkit.getWorld(name) != null || worldFolderExists(name)) {
+            player.sendMessage(Component.text("A world named '").color(NamedTextColor.RED)
+                    .append(Component.text(name).color(NamedTextColor.YELLOW))
+                    .append(Component.text("' already exists.").color(NamedTextColor.RED)));
+            return;
+        }
+        player.closeInventory();
+        new PlanetDesignMenu(this, player, name).open(player);
+    }
+
+    // ── Curated terrain looks (config.yml "terrain-looks") ───────────────
+
+    /**
+     * The curated terrain-look ids in menu order: {@code terrain-looks-order}
+     * first, then every look the admin added without listing it.
+     */
+    private List<String> orderedLookIds() {
+        ConfigurationSection looks = getConfig().getConfigurationSection("terrain-looks");
+        if (looks == null) {
+            return List.of();
+        }
+        List<String> keys = new ArrayList<>(looks.getKeys(false));
+        List<String> ordered = new ArrayList<>();
+        for (String wanted : getConfig().getStringList("terrain-looks-order")) {
+            for (String key : keys) {
+                if (key.equalsIgnoreCase(wanted) && !ordered.contains(key)) {
+                    ordered.add(key);
+                }
+            }
+        }
+        for (String key : keys) {
+            if (!ordered.contains(key)) {
+                ordered.add(key);
+            }
+        }
+        return ordered;
+    }
+
+    /**
+     * The curated terrain look with this id, or {@code null}. Look ids are
+     * matched without case, because YAML keys are not.
+     */
+    private ConfigurationSection terrainLook(String id) {
+        ConfigurationSection looks = getConfig().getConfigurationSection("terrain-looks");
+        if (looks == null || id == null || id.isBlank()) {
+            return null;
+        }
+        for (String key : looks.getKeys(false)) {
+            if (key.equalsIgnoreCase(id)) {
+                return looks.getConfigurationSection(key);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * The curated terrain looks from config.yml as picker entries. A look whose
+     * id is already used by a built-in generation or a generation-preset is
+     * skipped: the built-in wins wherever a generation is named by id, so
+     * listing the look as well would only offer the same id twice.
+     */
+    private List<Generation> terrainLooks(List<String> takenIds) {
+        ConfigurationSection looks = getConfig().getConfigurationSection("terrain-looks");
+        if (looks == null) {
+            return List.of();
+        }
+        List<Generation> result = new ArrayList<>();
+        for (String id : orderedLookIds()) {
+            if (containsIgnoreCase(takenIds, id)) {
+                continue;
+            }
+            ConfigurationSection entry = looks.getConfigurationSection(id);
+            if (entry == null) {
+                continue;
+            }
+            PlanetTerrain.Spec spec = specFromConfig(entry);
+            if (spec == null || spec.isVoid()) {
+                getLogger().warning("Ignoring terrain look '" + id
+                        + "': it needs at least one 'layers' entry (bottom -> top) in config.yml.");
+                continue;
+            }
+            String name = entry.getString("display-name",
+                    id.substring(0, 1).toUpperCase(Locale.ROOT) + id.substring(1).replace('_', ' '));
+            String description = entry.getString("description",
+                    "A curated terrain look from config.yml");
+            String iconName = entry.getString("icon", "GRASS_BLOCK");
+            Material icon = Material.matchMaterial(iconName);
+            if (icon == null || icon == Material.AIR) {
+                getLogger().warning("Terrain look '" + id + "': icon '" + iconName
+                        + "' is not a material — using GRASS_BLOCK.");
+                icon = Material.GRASS_BLOCK;
+            }
+            result.add(new Generation(id, name, description, icon, spec));
+        }
+        return result;
+    }
+
+    private static boolean containsIgnoreCase(List<String> ids, String id) {
+        for (String candidate : ids) {
+            if (candidate.equalsIgnoreCase(id)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /**
      * Fills a HUD template in for one player. Unknown placeholders are left
      * exactly as typed, so a typo shows up in the HUD instead of vanishing.
@@ -7739,6 +8422,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 || pendingLobbyEdits.containsKey(id) || pendingHomePrompts.containsKey(id)
                 || pendingHudNames.containsKey(id)
                 || pendingPlaylistRenames.containsKey(id)
+                || pendingDesignNames.contains(id)
                 || (friendSystem != null && friendSystem.hasPrompt(player));
     }
 
@@ -9524,8 +10208,12 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                       Material icon, PlanetTerrain.Spec spec) {
     }
 
-    /** Whether a player may use the admin panel: op, or the explicit permission. */
-    boolean canUseAdmin(Player player) {
+    /**
+     * Whether a player may use the admin panel: op, or the explicit permission.
+     * Public because the casino's own admin panel lives in another package and
+     * has to ask exactly the same question.
+     */
+    public boolean canUseAdmin(Player player) {
         return player.isOp() || player.hasPermission("planets.admin");
     }
 
@@ -9580,6 +10268,21 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 continue; // already listed above
             }
             planets.add(new AdminPlanet(name, planet.name(), null,
+                    isLockedWorld(name), isProtectedWorldName(name, middleEarth, mainWorld),
+                    landingModeOf(name), structuresEnabled(name), PlanetTerrain.load(getConfig(), name)));
+        }
+        // Worlds created but not confirmed yet are hidden from /p on purpose, so
+        // they are missing from the loop above. They belong here all the same:
+        // the per-planet panel is where the Confirm button lives.
+        List<String> listed = new ArrayList<>();
+        for (AdminPlanet planet : planets) {
+            listed.add(planet.worldName());
+        }
+        for (String name : pendingWorlds()) {
+            if (containsIgnoreCase(listed, name)) {
+                continue;
+            }
+            planets.add(new AdminPlanet(name, adminDisplayName(name), myPlanetManager.get(name),
                     isLockedWorld(name), isProtectedWorldName(name, middleEarth, mainWorld),
                     landingModeOf(name), structuresEnabled(name), PlanetTerrain.load(getConfig(), name)));
         }
@@ -10275,6 +10978,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         for (String preview : livePreviewWorlds()) {
             known.add(preview.toLowerCase(Locale.ROOT)); // cleaned up separately
         }
+        for (String pending : pendingWorlds()) {
+            known.add(pending.toLowerCase(Locale.ROOT)); // hidden from /p; the expiry sweep owns it
+        }
 
         List<String> leftovers = new ArrayList<>();
         File[] children = Bukkit.getWorldContainer().listFiles();
@@ -10378,6 +11084,15 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     /** A lobby by id, display name or world name, or null. */
     Lobby adminLobby(String query) {
         return findLobby(query);
+    }
+
+    /** Opens the casino admin panel (Dashboard → Casino, or /casino admin). */
+    public void openAdminCasino(Player player) {
+        if (casino == null || !canUseAdmin(player)) {
+            return;
+        }
+        player.closeInventory();
+        casino.openAdmin(player);
     }
 
     /** Opens the admin lobby list (Dashboard → Lobby Admin, or a planet panel). */
@@ -10802,6 +11517,12 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         Material.COMMAND_BLOCK, spec));
             }
         }
+        // Curated terrain looks last, minus any id a built-in or preset already uses.
+        List<String> taken = new ArrayList<>();
+        for (Generation entry : list) {
+            taken.add(entry.id());
+        }
+        list.addAll(terrainLooks(taken));
         return list;
     }
 
@@ -10874,8 +11595,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(PlanetTerrain.describe(spec)).color(NamedTextColor.YELLOW))
                 .append(Component.text(" — " + filled + " column(s) re-laid inside the border.")
                         .color(NamedTextColor.GREEN)));
-        actor.sendMessage(Component.text("Existing builds stand; only ground that didn't match was replaced.")
-                .color(NamedTextColor.GRAY));
+        actor.sendMessage(Component.text("The ground was re-laid in place — the old surface is gone rather ")
+                .color(NamedTextColor.GRAY)
+                .append(Component.text("than left hanging above it, and anything built above the ground stands.")
+                        .color(NamedTextColor.GRAY)));
         getLogger().info(actor.getName() + " set the terrain of '" + worldName + "' to "
                 + PlanetTerrain.describe(spec) + ".");
         return true;
@@ -11259,6 +11982,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
         boolean worldGone = deleteWorldNow(worldName);
         clearWorldConfig(worldName);
+        getConfig().set("pending-worlds." + worldName, null);
         rememberDeletedWorld(worldName);
         saveConfigQuietly();
         PlanetTravel.loadConfig(getConfig());

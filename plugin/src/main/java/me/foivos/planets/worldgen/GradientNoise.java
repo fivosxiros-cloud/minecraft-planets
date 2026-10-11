@@ -40,7 +40,7 @@ final class GradientNoise {
 
     // ── 2D gradient (Perlin) noise ───────────────────────────────────────
 
-    /** Perlin noise in roughly {@code [-1, 1]}. */
+    /** Perlin noise in {@code [-1, 1]}. */
     double perlin2(double x, double z) {
         int xi = fastFloor(x);
         int zi = fastFloor(z);
@@ -56,8 +56,19 @@ final class GradientNoise {
         double n11 = grad2(perm[(b + 1) & 255], xf - 1, zf - 1);
         double low = lerp(v, n00, n10);
         double high = lerp(v, n01, n11);
-        return lerp(u, low, high);
+        // The four gradients are the diagonals (±1, ±1), so each corner contributes up to
+        // |x| + |z| = 2, and the result is a convex blend of the corners: 2 is a hard bound.
+        // Dividing by it is what actually holds this function to the [-1, 1] its callers
+        // assume. Without it the raw range is about ±1.9 — the diagonal gradients are √2
+        // long rather than 1 — and 14% of samples fall outside the range, which made every
+        // feature that shapes the value (a mountain rising as |v|^1.3, a mesa as
+        // ((v - 0.25) / 0.75)^1.75) overshoot its configured strength by a factor of two to
+        // four and cut the landscape down to the planet's floor.
+        return lerp(u, low, high) * PERLIN2_PEAK;
     }
+
+    /** 1 over the largest value {@link #perlin2} can return. */
+    private static final double PERLIN2_PEAK = 0.5;
 
     // ── 3D gradient noise (caves, overhangs, floating islands) ───────────
 

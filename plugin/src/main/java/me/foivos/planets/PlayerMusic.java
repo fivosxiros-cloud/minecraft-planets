@@ -95,9 +95,12 @@ final class PlayerMusic {
 
     /**
      * What a player is hearing: the playlist it came from (null for a single
-     * song), which song, and when the next one is due.
+     * song), which song, when the next one is due, and the world the sound was
+     * sent in. A sound cannot walk through a world border on its own, so that
+     * last part is how a planet change is noticed and the song started again on
+     * the other side.
      */
-    private record Playback(String playlist, String song, int index, long nextAt) {
+    private record Playback(String playlist, String song, int index, long nextAt, String world) {
         boolean singleSong() {
             return playlist == null;
         }
@@ -301,7 +304,7 @@ final class PlayerMusic {
         if (playback != null && name.equalsIgnoreCase(playback.playlist())) {
             // Keep playing from the same place, now that everything shifted.
             playing.put(player, new Playback(playback.playlist(), playback.song(),
-                    Math.max(0, playback.index() - 1), playback.nextAt()));
+                    Math.max(0, playback.index() - 1), playback.nextAt(), playback.world()));
         }
         save();
         return true;
@@ -339,7 +342,8 @@ final class PlayerMusic {
         Playback playback = playing.get(player);
         if (playback != null && playback.playlist() != null
                 && playback.playlist().equalsIgnoreCase(oldName)) {
-            playing.put(player, new Playback(clean, playback.song(), playback.index(), playback.nextAt()));
+            playing.put(player, new Playback(clean, playback.song(), playback.index(),
+                    playback.nextAt(), playback.world()));
         }
         save();
         return RenameResult.OK;
@@ -382,7 +386,7 @@ final class PlayerMusic {
             }
             nowAt = Math.max(0, Math.min(nowAt, size - 1));
             playing.put(player, new Playback(playback.playlist(), songs.get(nowAt), nowAt,
-                    playback.nextAt()));
+                    playback.nextAt(), playback.world()));
         }
         save();
         return true;
@@ -423,11 +427,10 @@ final class PlayerMusic {
         if (!enabled) {
             return;
         }
-        player.stopSound(SoundCategory.MUSIC);
-        player.playSound(player.getLocation(), sound, SoundCategory.MUSIC, volume, 1.0f);
+        emit(player, sound, volume);
         unsilence(player.getUniqueId()); // asking for a song lifts a Stop
         playing.put(player.getUniqueId(), new Playback(null, sound.name(), -1,
-                System.currentTimeMillis() + trackSeconds * 1000L + GAP_MILLIS));
+                System.currentTimeMillis() + trackSeconds * 1000L + GAP_MILLIS, worldName(player)));
     }
 
     /**
@@ -544,7 +547,19 @@ final class PlayerMusic {
                 continue;
             }
             Playback playback = playing.get(id);
-            if (playback == null || now < playback.nextAt()) {
+            if (playback == null) {
+                continue;
+            }
+            if (!playback.world().equals(worldName(player))) {
+                // The client throws out a sound along with the world it was
+                // sent in, so a song started on one planet would go silent the
+                // moment its listener stepped on to another. Noticing the
+                // crossing and starting the song again in the new world is what
+                // keeps the music going wherever the player travels.
+                replay(player, playback);
+                continue;
+            }
+            if (now < playback.nextAt()) {
                 continue;
             }
             if (playback.singleSong()) {
@@ -570,11 +585,61 @@ final class PlayerMusic {
             playing.remove(player.getUniqueId());
             return;
         }
-        player.stopSound(SoundCategory.MUSIC);
-        player.playSound(player.getLocation(), sound, SoundCategory.MUSIC, volume, 1.0f);
+        emit(player, sound, volume);
         unsilence(player.getUniqueId()); // asking for a playlist lifts a Stop
         playing.put(player.getUniqueId(), new Playback(playlist.name(), playlist.songs().get(index), index,
-                System.currentTimeMillis() + trackSeconds * 1000L + GAP_MILLIS));
+                System.currentTimeMillis() + trackSeconds * 1000L + GAP_MILLIS, worldName(player)));
+    }
+
+    /** Re-sends the song a player is part-way through, in the world they are in now. */
+    private void replay(Player player, Playback playback) {
+        String world = worldName(player);
+        int index = playback.index();
+        Sound sound;
+        if (playback.singleSong()) {
+            sound = PlanetMusic.sound(playback.song());
+        } else {
+            Playlist playlist = playlist(player.getUniqueId(), playback.playlist());
+            if (playlist == null || playlist.songs().isEmpty()) {
+                playing.remove(player.getUniqueId());
+                return;
+            }
+            index = Math.min(Math.max(index, 0), playlist.songs().size() - 1);
+            sound = PlanetMusic.sound(playlist.songs().get(index));
+        }
+        if (sound == null) {
+            playing.remove(player.getUniqueId());
+            return;
+        }
+        // The clock is left alone: the song was restarted in the new world, but
+        // it should still give way to the next one when it was going to.
+        emit(player, sound, volume);
+        playing.put(player.getUniqueId(),
+                new Playback(playback.playlist(), playback.song(), index, playback.nextAt(), world));
+    }
+
+    /**
+     * Sends one song to one player, tied to the player rather than placed at a
+     * spot in the world.
+     *
+     * <p>A sound placed at a location is faded out by distance, so a track
+     * started at somebody's feet is inaudible a few dozen blocks later — on a
+     * planet that is most of the song. Handing the sound to
+     * {@code Sound.Emitter.self()} instead parents it to the listener, so it
+     * stays in their ears wherever they walk, and only ever reaches them.
+     *
+     * <p>Shared with {@link PlanetMusic} so the automatic soundtrack follows a
+     * player around the same way the personal one does.
+     *
+     * @param player the only player who hears the song
+     * @param sound the song to send
+     * @param volume how loud to send it
+     */
+    static void emit(Player player, Sound sound, float volume) {
+        player.stopSound(SoundCategory.MUSIC);
+        player.playSound(net.kyori.adventure.sound.Sound.sound(
+                        sound, net.kyori.adventure.sound.Sound.Source.MUSIC, volume, 1.0f),
+                net.kyori.adventure.sound.Sound.Emitter.self());
     }
 
     // ── Display helpers ─────────────────────────────────────────────────

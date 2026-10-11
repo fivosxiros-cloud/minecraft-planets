@@ -749,6 +749,20 @@ preview-worlds: []
 # only when you deliberately want that world listed as a planet once more.
 deleted-planet-worlds: []
 
+# Worlds an admin created with "/planets create" but has not confirmed yet. A
+# pending planet is deliberately NOT listed in the /p menu: nobody can visit it
+# until its creator publishes it with "/planets confirm <world>". Admins can see
+# what is waiting with "/planets pending", and throw one away for good with
+# "/planets discard <world>".
+#
+# Anything left unconfirmed for longer than expire-hours is deleted permanently
+# (world folder, Multiverse entry and its name retired), so a half-finished test
+# planet can never pile up on the server. Set to 0 to keep them forever.
+# Written automatically — you should not need to touch this list.
+pending-planets:
+  expire-hours: 24
+pending-worlds: {}
+
 # Planet terrain ("generation") of the worlds this plugin creates.
 # Purchased planets and "/planets create <name> <generation>" worlds are FLAT
 # worlds whose generator settings are built from a layer stack ordered bottom →
@@ -792,6 +806,424 @@ generation-presets:
   # A preset may also be raw flat-generator JSON:
   # glass:
   #   json: '{"layers":[{"block":"glass","height":2}],"biome":"plains"}'
+
+# Curated, editable terrain "looks" — ready-made generations an admin picks from
+# BEFORE creating a planet, so the ground is chosen up front. They work anywhere
+# a generation does:
+#   /planets create <name> <look>                (a brand-new public planet)
+#   /planets preview <look>                      (a throwaway world to walk in)
+#   /planets world <planet> terrain <look>       (re-terrain an existing world)
+#   the admin Terrain picker (per planet, and per lobby)
+#
+# Layers are listed BOTTOM -> TOP, exactly like generation-presets above: the
+# first entry sits on the world floor, the last one is the visible surface.
+# KEEP A LOOK SHORT (a handful of blocks). The planet is built from the world
+# floor upwards, so a large height does not make a hill — it pushes the surface
+# up out of the world and the terrain comes out broken. To raise the ground a
+# little (the "mountains" look below) add blocks to the stone layer instead.
+#
+# terrain-looks-order sets the menu order; looks not listed follow afterwards.
+#   terrain-looks-order: ["normal", "rough", "landscapes", "mountains", "corrupted"]
+#
+# Each look takes: display-name, description, icon (any Bukkit material), biome
+# and layers. Copy one, rename the key and change the blocks/heights.
+# ── The planet designer ──────────────────────────────────────────────────────
+# Design a planet BEFORE it is built: pick a preset for each filter you care
+# about, and the chosen presets are layered onto one baseline shape. Every preset
+# is a real "terrain" section (the same keys a planets/*.yml profile uses), so a
+# preset genuinely changes the engine's numbers — mountain strength, river width,
+# sea level — rather than only the label.
+#
+#   /planets create <name> <design>              a ready-made bundle, below
+#   /planets design <name> <filter>=<preset>...  shape one by hand
+#   /planets design <name> mountains=dramatic rivers=wide seas=deep
+#
+# A hand-designed planet is written back into "designed" below, so it keeps its
+# shape after a restart. Run "/planets reload" after editing this section.
+#
+# "style" is the shape everything starts from (see the styles listed above the
+# terrain-looks section). Filters are applied in the order they appear here, so
+# the same choices always produce the same world.
+# NOTE: a feature the baseline has switched OFF (canyons, plateaus, islands) only
+# turns on when its preset says "enabled: true" — presets keep the baseline's
+# setting otherwise. The presets below already do this.
+planet-design:
+  style: natural
+
+  filters:
+    relief:
+      display-name: Relief
+      description: "How high the land sits overall"
+      icon: IRON_PICKAXE
+      presets:
+        plains:      {height: {base: 64, min: 0, max: 128}, vertical-scale: 1.0}
+        plains-flat: {height: {base: 64, min: 30, max: 102}, vertical-scale: 1.0}
+        normal:      {height: {base: 70, min: 0, max: 146}, vertical-scale: 1.0}
+        highlands:   {height: {base: 92, min: 24, max: 176}, vertical-scale: 1.0}
+        elevated:    {height: {base: 92, min: 0, max: 208}, vertical-scale: 1.1}
+        extreme:  {height: {base: 108, min: 30, max: 320}, vertical-scale: 1.25}
+    mountains:
+      display-name: Mountains
+      description: "Ridged ranges: how tall, how wide, how sharp"
+      icon: TUFF
+      presets:
+        none:     {mountains: {enabled: false}}
+        gentle:   {mountains: {strength: 26, scale: 430, width: 280, sharpness: 0.45}}
+        normal:   {mountains: {strength: 46, scale: 340, width: 240, sharpness: 0.7}}
+        dramatic: {mountains: {strength: 70, scale: 340, width: 230, sharpness: 0.75}}
+        pinnacles: {mountains: {enabled: true, strength: 78, scale: 240, width: 100, sharpness: 0.9}}
+    hills:
+      display-name: Hills
+      description: "Rolling relief between the big features"
+      icon: OAK_SAPLING
+      presets:
+        flat:    {valleys: {enabled: false}, detail-strength: 1.2}
+        gentle:  {valleys: {strength: 8, scale: 300, width: 200, sharpness: 0.25}, detail-strength: 2.5}
+        rolling: {valleys: {strength: 18, scale: 240, width: 160, sharpness: 0.35}, detail-strength: 4}
+        rugged:  {valleys: {strength: 30, scale: 190, width: 130, sharpness: 0.5}, detail-strength: 6}
+    rivers:
+      display-name: Rivers & canyons
+      description: "Winding channels cut below sea level, so they fill with water"
+      icon: WATER_BUCKET
+      presets:
+        none:    {canyons: {enabled: false}}
+        gentle:  {canyons: {enabled: true, strength: 6, scale: 900, width: 26, sharpness: 0.25}}
+        winding: {canyons: {enabled: true, strength: 10, scale: 620, width: 30, sharpness: 0.35}}
+        wide:    {canyons: {enabled: true, strength: 14, scale: 420, width: 40, sharpness: 0.3}}
+        ravine:  {canyons: {enabled: true, strength: 34, scale: 300, width: 9, sharpness: 0.8}}
+        canyon:  {canyons: {enabled: true, strength: 58, scale: 300, width: 9, sharpness: 0.8}}
+    plateaus:
+      display-name: Plateaus
+      description: "Flat-topped mesas rising out of the land"
+      icon: TERRACOTTA
+      presets:
+        none:       {plateaus: {enabled: false}}
+        mesas:      {plateaus: {enabled: true, strength: 16, scale: 420, width: 200, sharpness: 0.75}}
+        tablelands: {plateaus: {enabled: true, strength: 28, scale: 320, width: 160, sharpness: 0.85}}
+    cliffs:
+      display-name: Cliffs
+      description: "Steps and scarps instead of smooth slopes"
+      icon: SCAFFOLDING
+      presets:
+        none:    {cliffs: {enabled: false}}
+        subtle:  {cliffs: {strength: 4, scale: 200, width: 12, sharpness: 0.5}}
+        stepped: {cliffs: {strength: 9, scale: 170, width: 9, sharpness: 0.8}}
+    seas:
+      display-name: Seas
+      description: "Sea level and whether there is any water at all"
+      icon: PRISMARINE_SHARD
+      presets:
+        none:     {sea-level: 38, liquid: air}
+        shallow:  {sea-level: 58, liquid: water}
+        normal:   {sea-level: 62, liquid: water}
+        deep:     {sea-level: 70, liquid: water}
+        lava:     {sea-level: 40, liquid: lava}
+    islands:
+      display-name: Islands
+      description: "Scattered land with sea between it"
+      icon: SAND
+      presets:
+        none:        {islands: {enabled: false}}
+        scattered:   {islands: {enabled: true, frequency: 0.0028, size: 90, height: 16, falloff: 0.5}}
+        archipelago: {islands: {enabled: true, frequency: 0.006, size: 70, height: 22, falloff: 0.5}}
+    roughness:
+      display-name: Roughness
+      description: "Small-scale bumps on the ground"
+      icon: GRAVEL
+      presets:
+        smooth: {detail-strength: 0.6}
+        normal: {detail-strength: 3, detail-frequency: 40}
+        rough:  {detail-strength: 6, detail-frequency: 26}
+        jagged: {detail-strength: 10, detail-frequency: 18}
+    warping:
+      display-name: Warping
+      description: "Sideways drift that makes shapes wind instead of run straight"
+      icon: ENDER_EYE
+      presets:
+        none:    {distortion-strength: 0}
+        subtle:  {distortion-strength: 8, distortion-frequency: 0.008}
+        twisted: {distortion-strength: 22, distortion-frequency: 0.005}
+    terracing:
+      display-name: Terracing
+      description: "Cuts the finished height into flat shelves, like contour lines"
+      icon: CUT_COPPER_STAIRS
+      presets:
+        none:     {terrace: 0}
+        shelves:  {terrace: 2}
+        bands:    {terrace: 4}
+        terraces: {terrace: 6}
+        contours: {terrace: 9}
+
+  # Ready-made designs: each one names a preset for the filters it cares about.
+  # Use them with "/planets create <name> <design>".
+  designs:
+    normal:
+      display-name: Normal
+      description: "Grass, soil, gentle hills and a few rivers — the safe default."
+      icon: GRASS_BLOCK
+      filters:
+        relief: normal
+        mountains: normal
+        hills: gentle
+        rivers: gentle
+        seas: normal
+        roughness: normal
+    alpine:
+      display-name: Alpine
+      description: "Tall sharp ranges, stepped cliffs and thin, high ground."
+      icon: SNOW_BLOCK
+      filters:
+        relief: elevated
+        mountains: dramatic
+        hills: rolling
+        rivers: gentle
+        cliffs: stepped
+        seas: shallow
+        roughness: rough
+    riverlands:
+      display-name: Riverlands
+      description: "Low, wide green country cut by plenty of water."
+      icon: WATER_BUCKET
+      filters:
+        relief: plains
+        mountains: gentle
+        hills: gentle
+        rivers: wide
+        seas: normal
+        roughness: smooth
+    highlands:
+      display-name: Highlands
+      description: "Raised stone tablelands with the wind taken out of the rivers."
+      icon: STONE
+      filters:
+        relief: highlands
+        mountains: normal
+        plateaus: mesas
+        cliffs: stepped
+        rivers: none
+        seas: none
+        roughness: rough
+    canyonlands:
+      display-name: Canyonlands
+      description: "Deep dry cuts through raised, rugged ground."
+      icon: RED_SANDSTONE
+      filters:
+        relief: elevated
+        mountains: normal
+        rivers: ravine
+        plateaus: tablelands
+        seas: none
+        roughness: rough
+    archipelago:
+      display-name: Archipelago
+      description: "Islands scattered through deep water."
+      icon: SAND
+      filters:
+        relief: plains
+        mountains: none
+        hills: gentle
+        islands: archipelago
+        seas: deep
+        rivers: none
+        roughness: normal
+
+  # ── Reference builds ───────────────────────────────────────────
+  # A design may theme its own materials (palette) and its own top block
+  # (surface), so it is not only a shape. The palette is keyed by the names the
+  # default surface stack already uses, so an entry called grass_block is what
+  # turns a design's top block into moon basalt, blackstone or calcite.
+    magma:
+      display-name: Magma
+      description: "Black basalt shelves stepping down into a lava sea."
+      icon: MAGMA_BLOCK
+      filters:
+        relief: normal
+        mountains: normal
+        rivers: none
+        plateaus: none
+        cliffs: stepped
+        seas: lava
+        terracing: terraces
+        roughness: normal
+      palette:
+        grass_block: BLACKSTONE
+        dirt: BASALT
+        stone: BASALT
+        deepslate: DEEPSLATE
+        sand: SOUL_SAND
+        gravel: MAGMA_BLOCK
+        ice: MAGMA_BLOCK
+
+    moon:
+      display-name: Moon
+      description: "Grey dust banded into wide contour shelves, with no water at all."
+      icon: SMOOTH_BASALT
+      filters:
+        relief: plains
+        mountains: gentle
+        hills: flat
+        rivers: none
+        plateaus: mesas
+        cliffs: none
+        seas: none
+        terracing: shelves
+        roughness: smooth
+      palette:
+        grass_block: SMOOTH_BASALT
+        dirt: BASALT
+        stone: ANDESITE
+        deepslate: DEEPSLATE
+        sand: SMOOTH_BASALT
+        gravel: GRAVEL
+
+    terraces:
+      display-name: Terraces
+      description: "Stepped sand and terracotta shelves under a grass cap, with water between them."
+      icon: TERRACOTTA
+      filters:
+        relief: normal
+        mountains: normal
+        hills: gentle
+        rivers: wide
+        plateaus: none
+        cliffs: stepped
+        seas: shallow
+        terracing: bands
+        roughness: normal
+      # The top block changes with the height the terrain ended up at, which is
+      # what layers sand, terracotta and grass into one stepped shore.
+      surface:
+        layers:
+          cap:    {block: grass_block, depth: 1, min-altitude: 76}
+          soil:   {block: dirt, depth: 3, min-altitude: 76}
+          banded: {block: terracotta, depth: 3, min-altitude: 62, max-altitude: 75}
+          beach:  {block: sand, depth: 3, max-altitude: 61}
+          rock:   {block: sandstone, depth: 6, max-altitude: 61}
+          stone:  {block: stone, depth: 24}
+          deep:   {block: deepslate, depth: 999}
+
+    storm_cliffs:
+      display-name: Storm Cliffs
+      description: "Dark rain-worn cliffs and deep ravines with the sea at their feet."
+      icon: DEEPSLATE
+      filters:
+        relief: elevated
+        mountains: dramatic
+        hills: rolling
+        rivers: ravine
+        plateaus: none
+        cliffs: stepped
+        seas: normal
+        terracing: none
+        roughness: rough
+      palette:
+        grass_block: GRASS_BLOCK
+        dirt: COARSE_DIRT
+        stone: DEEPSLATE
+        deepslate: DEEPSLATE
+        sand: GRAVEL
+        gravel: GRAVEL
+
+    spires:
+      display-name: Spires
+      description: "Pale stone needles standing over a lava lake."
+      icon: CALCITE
+      filters:
+        relief: elevated
+        mountains: pinnacles
+        hills: rolling
+        rivers: ravine
+        plateaus: none
+        cliffs: stepped
+        seas: lava
+        terracing: none
+        roughness: jagged
+      palette:
+        grass_block: CALCITE
+        dirt: DIORITE
+        stone: DIORITE
+        deepslate: TUFF
+        sand: WHITE_TERRACOTTA
+        gravel: BASALT
+
+    salt_flats:
+      display-name: Salt Flats
+      description: "A vast pale plain with low green islands scattered across it."
+      icon: SMOOTH_SANDSTONE
+      filters:
+        relief: plains-flat
+        mountains: none
+        hills: flat
+        rivers: none
+        plateaus: none
+        cliffs: none
+        seas: none
+        islands: scattered
+        terracing: none
+        roughness: smooth
+      surface:
+        layers:
+          green: {block: grass_block, depth: 1, min-altitude: 76}
+          soil:  {block: dirt, depth: 2, min-altitude: 76}
+          crust: {block: smooth_sandstone, depth: 4, max-altitude: 75}
+          bed:   {block: sandstone, depth: 8, max-altitude: 75}
+          stone: {block: stone, depth: 24}
+          deep:  {block: deepslate, depth: 999}
+
+  # Planets built with "/planets design". Written automatically — their shape has
+  # to be remembered so the world keeps its terrain after a restart.
+  designed: {}
+
+terrain-looks:
+  normal:
+    display-name: Normal
+    description: "Everyday grass, soil and stone."
+    icon: GRASS_BLOCK
+    biome: plains
+    layers:
+      - "stone:3"
+      - "dirt:3"
+      - "grass_block:2"
+  rough:
+    display-name: Rough
+    description: "Coarse gravel and bare stone under a thin grass crust."
+    icon: GRAVEL
+    biome: windswept_hills
+    layers:
+      - "stone:2"
+      - "gravel:3"
+      - "dirt:2"
+      - "grass_block:1"
+  landscapes:
+    display-name: Landscapes
+    description: "Deep soil and thick green over a wide stone bed."
+    icon: DIORITE
+    biome: plains
+    layers:
+      - "stone:4"
+      - "dirt:4"
+      - "grass_block:3"
+  mountains:
+    display-name: Mountains
+    description: "A raised stone plateau capped with only a little grass."
+    icon: TUFF
+    biome: windswept_gravelly_hills
+    layers:
+      - "stone:22"
+      - "cobblestone:3"
+      - "dirt:2"
+      - "grass_block:2"
+  corrupted:
+    display-name: Corrupted
+    description: "Overgrown, patched stone with moss and gravel breaking through."
+    icon: MOSSY_COBBLESTONE
+    biome: dark_forest
+    layers:
+      - "stone:3"
+      - "mossy_cobblestone:2"
+      - "gravel:2"
+      - "coarse_dirt:2"
+      - "grass_block:1"
 
 # Random teleport settings.
 teleport:

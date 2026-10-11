@@ -76,6 +76,10 @@ public final class CasinoMenu extends CasinoScreenBase {
         List<String> lore = new ArrayList<>();
         lore.add(stats.played() + " rounds played \u00B7 " + stats.wins() + " won");
         lore.add(casino().gamesAvailable() + " games open \u00B7 every round is free");
+        CasinoReward trophy = casino().displayReward(viewerId());
+        if (trophy != null) {
+            lore.add("\uD83C\uDF96 " + trophy.name() + " on display");
+        }
         return MenuStyle.header("Casino", NamedTextColor.GOLD, lore);
     }
 

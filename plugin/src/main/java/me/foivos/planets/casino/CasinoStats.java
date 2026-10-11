@@ -39,6 +39,7 @@ public final class CasinoStats {
     private static final String PLAYS = "plays";
     private static final String REWARDS = "rewards";
     private static final String ACHIEVEMENTS = "achievements";
+    private static final String DISPLAY = "display";
 
     private String name = "";
     private int played;
@@ -54,6 +55,7 @@ public final class CasinoStats {
     private final Map<String, Integer> plays = new LinkedHashMap<>();
     private final Map<String, Integer> rewards = new LinkedHashMap<>();
     private final Set<String> achievements = new LinkedHashSet<>();
+    private String display = "";
 
     /** The name the player was last seen under, for the record and the cabinet. */
     public String name() {
@@ -119,6 +121,21 @@ public final class CasinoStats {
     /** How many of each prize the player has collected, by reward id. */
     public Map<String, Integer> rewards() {
         return Collections.unmodifiableMap(rewards);
+    }
+
+    /**
+     * The id of the prize this player has put on display, or "" for none. A
+     * displayed prize is a trophy: it follows its owner into the hub, the
+     * record and the cabinet, and it is the one thing a collected prize can be
+     * <i>used</i> for — nothing is handed over and nothing is tradeable.
+     */
+    public String display() {
+        return display;
+    }
+
+    /** Puts a prize on display, or takes it off with a blank id. */
+    void display(String rewardId) {
+        this.display = rewardId == null ? "" : rewardId;
     }
 
     /** The achievements the player has unlocked, by id. */
@@ -287,6 +304,7 @@ public final class CasinoStats {
         readCounts(section.getConfigurationSection(PLAYS), plays);
         readCounts(section.getConfigurationSection(REWARDS), rewards);
         achievements.addAll(section.getStringList(ACHIEVEMENTS));
+        display = section.getString(DISPLAY, "");
     }
 
     private static void readCounts(ConfigurationSection section, Map<String, Integer> into) {
@@ -325,6 +343,9 @@ public final class CasinoStats {
         if (!achievements.isEmpty()) {
             section.set(ACHIEVEMENTS, new java.util.ArrayList<>(achievements));
         }
+        // Written even when blank, so taking a prize off display is remembered
+        // rather than coming back on the next restart.
+        section.set(DISPLAY, display == null || display.isBlank() ? null : display);
     }
 
     private static void set(ConfigurationSection section, String key, int value) {

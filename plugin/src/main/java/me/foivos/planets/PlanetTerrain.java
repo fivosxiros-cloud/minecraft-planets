@@ -1,5 +1,6 @@
 package me.foivos.planets;
 
+import org.bukkit.HeightMap;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
@@ -275,6 +276,14 @@ final class PlanetTerrain {
      * The repair pass, optionally in <b>force</b> mode: every column is re-laid,
      * including ones that already hold different terrain (used when an admin
      * deliberately switches a planet to another generation).
+     * <p>
+     * In force mode the new stack is fitted to each column instead of being
+     * stacked on the world floor: it ends at the surface the column already has,
+     * so the old ground is <em>replaced in place</em>. Laying the stack at the
+     * floor and clearing three blocks above it left every planet that already had
+     * terrain hanging in the air over a second slab, with a sheer wall where the
+     * fill area stopped. Anything a player built above the ground is untouched,
+     * because only the ground portion of the column is rewritten.
      *
      * @return how many columns had to be filled.
      */
@@ -299,14 +308,24 @@ final class PlanetTerrain {
         int repaired = 0;
         for (int x = centerX - half; x <= centerX + half; x++) {
             for (int z = centerZ - half; z <= centerZ + half; z++) {
+                int groundTop = topY;
                 if (force) {
-                    if (world.getBlockAt(x, topY, z).getType() == surface) {
-                        continue; // already this generation
+                    // Where does this column's ground already sit? The heightmap
+                    // answers that in one call instead of walking the column.
+                    int existingTop = world.getHighestBlockYAt(x, z, HeightMap.WORLD_SURFACE);
+                    if (existingTop - minY >= total) {
+                        Material existing = world.getBlockAt(x, existingTop, z).getType();
+                        if (!existing.isAir()) {
+                            if (existing == surface) {
+                                continue; // already this generation
+                            }
+                            groundTop = existingTop;
+                        }
                     }
                 } else if (!isColumnEmpty(world, x, z, minY, topY)) {
                     continue; // ground (or anything a player built) exists here
                 }
-                int y = minY;
+                int y = Math.max(minY, groundTop - total + 1);
                 for (Layer layer : spec.layers()) {
                     Material block = material(layer.block());
                     for (int i = 0; i < Math.max(1, layer.height()); i++, y++) {
@@ -321,7 +340,7 @@ final class PlanetTerrain {
                 }
                 // Clear anything that would poke out above the new surface.
                 for (int i = 1; i <= 3; i++) {
-                    Block above = world.getBlockAt(x, topY + i, z);
+                    Block above = world.getBlockAt(x, groundTop + i, z);
                     if (above.getType().isAir()) {
                         break;
                     }

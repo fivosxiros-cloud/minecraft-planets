@@ -82,9 +82,18 @@ public final class GenerationContext {
         this.distortionZ = terrain.distortionStrength() > 0
                 ? new NoiseSampler(new NoiseSettings(NoiseType.PERLIN, 8484, 1, 1, 1, 0.5, 2.0,
                 terrain.distortionStrength(), terrain.distortionFrequency()), seed) : null;
+        // detailFrequency is a size in blocks, exactly like every other scale in the
+        // engine (NoiseSettings.scale is documented as "feature size in blocks", and the
+        // built-in styles pass 34, 50 and 60 for it). It used to be inverted here, which
+        // turned "40" into a lattice 0.025 blocks wide: the roughness then varied on a
+        // finer scale than the block grid, so it stopped being roughness and became white
+        // noise — plus or minus detailStrength blocks of random height on *every* column,
+        // which is what made designed terrain read as shattered instead of bumpy. The floor
+        // keeps a value tuned against the old meaning ("cycles per block") from silently
+        // producing sub-block noise again.
         this.detail = terrain.detailStrength() > 0
-                ? new NoiseSampler(new NoiseSettings(NoiseType.PERLIN, 31337, 1.0 / terrain.detailFrequency(),
-                1, 2, 0.5, 2.0, 0.0, 0.0), seed) : null;
+                ? new NoiseSampler(new NoiseSettings(NoiseType.PERLIN, 31337,
+                Math.max(8.0, terrain.detailFrequency()), 1, 2, 0.5, 2.0, 0.0, 0.0), seed) : null;
 
         this.mountains = sampler(terrain.mountains(), 11);
         this.valleys = sampler(terrain.valleys(), 23);

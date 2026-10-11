@@ -35,7 +35,7 @@ import java.util.List;
  *   ┌────────────┤ server health (4) ├────────────┐
  *   Planets(10) Owned(11) Public(12) Loaded(13) Unloaded(14) Locked(15) Retired(16)
  *   Blocks(19)  Top(20)   Previews(21) Leftovers(22) Empty(23)
- *   └─ Browse(29) ─ Lobby Admin(32) ─ Clean up(31) ─ Rescan(33) ─ Back to /planets(43) ─┘
+ *   └─ Browse(29) ─ Casino(28) ─ Clean up(31) ─ Lobby Admin(32) ─ Back to /planets(43) ─┘
  * </pre>
  */
 public final class AdminOverviewMenu implements InventoryHolder {
@@ -65,6 +65,7 @@ public final class AdminOverviewMenu implements InventoryHolder {
     private static final int BORDERS_SLOT = 34;
     private static final int HOMES_SLOT = 24;
     private static final int HUD_SLOT = 25;
+    private static final int CASINO_SLOT = 28;
     private static final int BACK_SLOT = 40;
 
     private final Planets plugin;
@@ -142,6 +143,10 @@ public final class AdminOverviewMenu implements InventoryHolder {
             }
             case HUD_SLOT -> {
                 plugin.openHudEditor(player);
+                return;
+            }
+            case CASINO_SLOT -> {
+                plugin.openAdminCasino(player);
                 return;
             }
             case CLEANUP_SLOT -> {
@@ -222,6 +227,11 @@ public final class AdminOverviewMenu implements InventoryHolder {
                 "Leftover worlds with no players on them",
                 "These are the ones the cleanup deletes"));
 
+        inventory.setItem(CASINO_SLOT, actionItem(Material.GOLD_INGOT, "\uD83C\uDFB0 Casino",
+                "Every game: switch it on or off, move its slot, edit its icon",
+                "The casino open or closed, the cooldown, prize display",
+                "The prize pool: tiers and odds",
+                "Every click is written to config.yml at once"));
         inventory.setItem(BROWSE_SLOT, actionItem(Material.CHEST, "Browse Planets",
                 "Every planet, with enter/regenerate/lock/landing/icon/terrain/delete",
                 "Same as the planet list in /planets admin"));

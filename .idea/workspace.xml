@@ -10,21 +10,35 @@
     <option name="selectedModelId" value="auto" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="ae52dff4-f657-4a16-913a-f936559091ef" name="Changes" comment="Fixed a lot of things and added way more ...">
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/FriendStore.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/FriendStore.java" afterDir="false" />
+    <list default="true" id="ae52dff4-f657-4a16-913a-f936559091ef" name="Changes" comment="tried to implement a better generation for my planets , also now /music follows the player and many more changes">
+      <change afterPath="$PROJECT_DIR$/plugin/.X/cp.txt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/plugin/.patch/step1.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/plugin/.patch/step2.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/PlanetDesignMenu.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/AdminCasinoMenu.java" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/PlanetDesign.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/AdminOverviewMenu.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/AdminOverviewMenu.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/AdminPlanetPanelMenu.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/AdminPlanetPanelMenu.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/AdminPlanetsMenu.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/AdminPlanetsMenu.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/PlanetMusic.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/PlanetMusic.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/PlanetTerrain.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/PlanetTerrain.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/Planets.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/Planets.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/PlayerMusic.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/PlayerMusic.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/ShipModel.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/ShipModel.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/ShipPilot.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/ShipPilot.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/SidebarEditorMenu.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/SidebarEditorMenu.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/SidebarScoreboard.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/SidebarScoreboard.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/SpaceGuard.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/SpaceGuard.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/SpaceWorld.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/SpaceWorld.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoCommand.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoCommand.java" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoManager.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoManager.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/CoinFlipGame.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/CoinFlipGame.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/DiceGame.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/DiceGame.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/RpsGame.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/RpsGame.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/SlotsGame.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/SlotsGame.java" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/WheelGame.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/games/WheelGame.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoMenu.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoMenu.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoStats.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoStats.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoStatsMenu.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/casino/CasinoStatsMenu.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/GenerationContext.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/GenerationContext.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/GradientNoise.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/GradientNoise.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/NaturalTerrain.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/NaturalTerrain.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/PlanetProfile.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/PlanetProfile.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/PlanetRegistry.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/PlanetRegistry.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/TerrainSettings.java" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/java/me/foivos/planets/worldgen/TerrainSettings.java" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/plugin/src/main/resources/config.yml" beforeDir="false" afterPath="$PROJECT_DIR$/plugin/src/main/resources/config.yml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -37,7 +51,7 @@
     </persistenceIdMap>
   </component>
   <component name="EmbeddingIndexingInfo">
-    <option name="cachedIndexableFilesCount" value="247" />
+    <option name="cachedIndexableFilesCount" value="257" />
   </component>
   <component name="FileTemplateManagerImpl">
     <option name="RECENT_TEMPLATES">
@@ -256,7 +270,15 @@
       <option name="project" value="LOCAL" />
       <updated>1790947152872</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="Fixed a lot of things and added way more ...">
+      <option name="closed" value="true" />
+      <created>1791049200344</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1791049200344</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -279,6 +301,7 @@
     <MESSAGE value="created storage api module" />
     <MESSAGE value="new /friends and /card event" />
     <MESSAGE value="Fixed a lot of things and added way more ..." />
-    <option name="LAST_COMMIT_MESSAGE" value="Fixed a lot of things and added way more ..." />
+    <MESSAGE value="tried to implement a better generation for my planets , also now /music follows the player and many more changes" />
+    <option name="LAST_COMMIT_MESSAGE" value="tried to implement a better generation for my planets , also now /music follows the player and many more changes" />
   </component>
 </project>

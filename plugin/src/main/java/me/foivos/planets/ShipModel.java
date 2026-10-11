@@ -56,9 +56,9 @@ final class ShipModel {
     /** The boat the pilot rides in, or null when the server would not give us one. */
     private Boat boat;
     /**
-     * The invisible hand on the wheel. A boat is driven by its first passenger;
-     * putting this stand there means the boat is not driven by the pilot's own
-     * client, so the plugin can fly it at the configured pace.
+     * A stand in the first seat, so the boat is never left empty: an empty boat
+     * drifts and despawns, and this keeps {@link #boat()} valid while the pilot
+     * flies free of it (see {@link #seat}).
      */
     private ArmorStand driver;
     /** The banner at the stern, when the pilot flies one. */
@@ -67,6 +67,15 @@ final class ShipModel {
     private TextDisplay plate;
     /** Which boat the pilot picked, so a change in /settings can be noticed. */
     private PlayerSettings.BoatType type = PlayerSettings.BoatType.NORMAL;
+    /** How far above the boat's origin the pilot sat, read from the real seat. */
+    private double seatOffsetY = 0.55;
+    /**
+     * Whether the pilot has been taken out of the boat and given their own wings.
+     * A boat is driven by the player riding it, so while the pilot sat in it their
+     * client kept sending the boat's own position and fought every flight step.
+     * The ship now follows the pilot instead of carrying them.
+     */
+    private boolean pilotFree;
 
     private ShipModel() {
     }
@@ -99,6 +108,7 @@ final class ShipModel {
                 // the one the client thinks it controls.
                 ship.boat.addPassenger(ship.driver);
             }
+            ship.pilotFree = false;
             ship.boat.addPassenger(pilot);
             if (bannerWanted(settings, pilot)) {
                 ship.banner = banner(world, at);
@@ -130,19 +140,52 @@ final class ShipModel {
     }
 
     /**
-     * Puts the pilot in their seat if they are not in it: a boat asks its rider to
-     * step out when they sneak (and sneak is the docking key up here), so the
-     * flight tick seats them again - within the same server tick, before the
-     * client is ever told they left.
+     * Seats the pilot once to measure the seat, then lets them out again.
+     * <p>
+     * They are seated for a single tick: a boat draws its rider at a fixed height
+     * above the hull, and that is the one thing here that cannot be guessed, so it
+     * is read from the real seat. Being a rider is the last time the client has any
+     * say in where the ship is - see {@link #pilotFree}.
      */
     void seat(Player pilot) {
         Boat boat = boat();
         if (boat == null || pilot == null || !pilot.isOnline()) {
             return;
         }
-        if (pilot.getVehicle() != boat) {
-            boat.addPassenger(pilot);
+        if (!pilotFree) {
+            if (pilot.getVehicle() != boat) {
+                // Seated once, so the hull is drawn exactly where it used to sit.
+                boat.addPassenger(pilot);
+                return;
+            }
+            // One tick later they are in the seat: read it, then hand them their
+            // own wings.
+            seatOffsetY = pilot.getLocation().getY() - boat.getLocation().getY();
+            pilotFree = true;
         }
+        // ...and take them back out of it. A boat owns its rider: the server snaps a
+        // passenger to their seat every tick and the client stops sending their own
+        // movement at all, so a pilot left aboard cannot fly. What that looked like
+        // was the hull being parked under the pilot while the seat pulled the pilot
+        // back down onto the hull, over and over - the ship crawled and fought the
+        // controls. This is also what leaves sneak free to be a pure docking key: a
+        // rider who sneaks is asked to step out, which is why the old flight had to
+        // re-seat its pilot every tick to undo it.
+        if (pilot.getVehicle() == boat) {
+            boat.removePassenger(pilot);
+        }
+        pilot.setAllowFlight(true);
+        if (!pilot.isFlying()) {
+            pilot.setFlying(true);
+        }
+    }
+
+    /** Where the hull goes so the pilot appears to be standing in the ship. */
+    Location hullFor(Player pilot) {
+        Location target = pilot.getLocation().clone();
+        target.subtract(0, seatOffsetY, 0);
+        target.setPitch(0f);
+        return target;
     }
 
     /**
@@ -197,6 +240,7 @@ final class ShipModel {
         }
         type = wanted;
         boat = fresh; // the pilot's seat is the new boat from here on
+        pilotFree = false; // a new boat has to be seated (and measured) again
         if (old != null && !old.isDead()) {
             // The old boat is no longer *the* boat, so stepping out of it is
             // allowed - the pilot is released and then seated again below.
@@ -208,6 +252,7 @@ final class ShipModel {
         if (driver != null) {
             fresh.addPassenger(driver);
         }
+        pilotFree = false;
         fresh.addPassenger(pilot);
     }
 
