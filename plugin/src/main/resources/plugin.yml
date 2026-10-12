@@ -6,6 +6,10 @@ api-version: '26.1.2'
 load: POSTWORLD
 softdepend: [Multiverse-Core, ProtocolLib, Vault, PlaceholderAPI]
 
+depend:
+  - player-data-api
+  - player-data-yml
+
 commands:
   planets:
     description: Opens the planet teleportation menu

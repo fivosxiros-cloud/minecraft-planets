@@ -1,6 +1,8 @@
 package me.foivos.planets;
 
 import io.papermc.paper.scoreboard.numbers.NumberFormat;
+import me.george.playerdata.api.PlayerProfile;
+import me.george.playerdata.api.PlayerProfileListener;
 import net.kyori.adventure.key.Key;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
@@ -976,5 +978,9 @@ public final class SidebarScoreboard {
         String key = name.trim().toLowerCase(Locale.ROOT).replace(' ', '_').replace('-', '_');
         NamedTextColor named = NamedTextColor.NAMES.value(key);
         return named == null ? fallback : named;
+    }
+
+    public void updatePlayerScoreboard(Player player, String race, String role, String team) {
+
     }
 }

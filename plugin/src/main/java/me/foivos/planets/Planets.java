@@ -1,5 +1,6 @@
 package me.foivos.planets;
 
+import me.george.playerdata.api.*;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
@@ -82,53 +83,80 @@ import java.util.stream.Collectors;
 
 public final class Planets extends JavaPlugin implements CommandExecutor, TabCompleter, PlayerDataContext {
 
-    /** How long "/planets lock" waits (seconds) before a planet actually locks. */
+    /**
+     * How long "/planets lock" waits (seconds) before a planet actually locks.
+     */
     private static final int DEFAULT_LOCK_WARNING_SECONDS = 10;
 
-    /** Default rename price ladder: 2nd rename=1k, 3rd=5k, 4th=10k, 5th+=20k. */
+    /**
+     * Default rename price ladder: 2nd rename=1k, 3rd=5k, 4th=10k, 5th+=20k.
+     */
     private static final List<Integer> DEFAULT_RENAME_PRICES = List.of(1000, 5000, 10000, 20000);
 
-    /** /planets sub-commands that require op. */
+    /**
+     * /planets sub-commands that require op.
+     */
     private static final Set<String> PLANET_ADMIN_SUBS = Set.of(
             "create", "preview", "admin", "icon", "landing", "delete", "setlanding",
             "lock", "world", "portals", "renameprice", "buy",
             "list", "profile", "debug"
     );
 
-    /** Menu icons the admin panel's Icon action cycles through. */
+    /**
+     * Menu icons the admin panel's Icon action cycles through.
+     */
     static final List<Material> ICON_PALETTE = List.of(
             Material.GRASS_BLOCK, Material.SAND, Material.RED_SAND, Material.BONE_BLOCK,
             Material.MAGMA_BLOCK, Material.WATER_BUCKET, Material.AMETHYST_BLOCK,
             Material.IRON_BLOCK, Material.NETHERRACK, Material.END_STONE,
             Material.SNOW_BLOCK, Material.PRISMARINE, Material.GLOWSTONE, Material.OBSIDIAN);
 
-    /** Lock countdowns for planets whose lock is pending, keyed by lowercase world name. */
+    /**
+     * Lock countdowns for planets whose lock is pending, keyed by lowercase world name.
+     */
     private final Map<String, PendingLock> pendingLocks = new HashMap<>();
 
-    /** Manages all player-owned planet data (my-planets.yml). */
+    /**
+     * Manages all player-owned planet data (my-planets.yml).
+     */
     private MyPlanetManager myPlanetManager;
 
-    /** Every player's personal preferences (player-settings.yml, /settings). */
+    /**
+     * Every player's personal preferences (player-settings.yml, /settings).
+     */
     private PlayerSettings playerSettings;
     /**
      * The {@code /settings} pages other plugins register (the bounty board, for
      * one), served to them as a Bukkit service.
      */
     private final ExternalSettings externalSettings = new ExternalSettings(this);
-    /** Every player's /home locations (homes.yml). */
+    /**
+     * Every player's /home locations (homes.yml).
+     */
     private HomeManager homeManager;
-    /** uuid -> the /home chat prompt waiting for that player's next message. */
+    /**
+     * uuid -> the /home chat prompt waiting for that player's next message.
+     */
     private final Map<UUID, HomePrompt> pendingHomePrompts = new HashMap<>();
-    /** uuid -> the HUD line whose label the player is typing in chat; -1 = a new line. */
+    /**
+     * uuid -> the HUD line whose label the player is typing in chat; -1 = a new line.
+     */
     private final Map<UUID, Integer> pendingHudNames = new HashMap<>();
 
-    /** A playlist whose new name is waiting in chat (the /music rename prompt). */
+    /**
+     * A playlist whose new name is waiting in chat (the /music rename prompt).
+     */
     private final Map<UUID, String> pendingPlaylistRenames = new HashMap<>();
 
-    /** Players whose next chat message names the planet they want to design. */
+    /**
+     * Players whose next chat message names the planet they want to design.
+     */
     private final Set<UUID> pendingDesignNames = new HashSet<>();
+    private PlayerDataServiceWrapper playerDataService;
 
-    /** A pending /home prompt: what the player's next chat message means. */
+    /**
+     * A pending /home prompt: what the player's next chat message means.
+     */
     private record HomePrompt(boolean rename, String homeName, Location location) {
 
         static HomePrompt rename(String homeName) {
@@ -140,7 +168,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** uuid -> the /home teleport counting down for that player. */
+    /**
+     * uuid -> the /home teleport counting down for that player.
+     */
     private final Map<UUID, PendingHomeTeleport> pendingHomeTeleports = new HashMap<>();
 
     /**
@@ -158,71 +188,115 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Personal settings: last chat time per player, for anti-chat-spam. */
+    /**
+     * Personal settings: last chat time per player, for anti-chat-spam.
+     */
     private final Map<UUID, Long> lastChatAt = new HashMap<>();
-    /** uuid -> last "your name was mentioned" ping, so a spammer can't flood it. */
+    /**
+     * uuid -> last "your name was mentioned" ping, so a spammer can't flood it.
+     */
     private final Map<UUID, Long> lastMentionAt = new HashMap<>();
-    /** uuid -> when a priority action bar (mention, planet lock, atmosphere) was sent. */
+    /**
+     * uuid -> when a priority action bar (mention, planet lock, atmosphere) was sent.
+     */
     private final Map<UUID, Long> lastPriorityBar = new HashMap<>();
-    /** How long the optional Planet HUD stays quiet after a priority action bar (ms). */
+    /**
+     * How long the optional Planet HUD stays quiet after a priority action bar (ms).
+     */
     private static final long HUD_QUIET_MILLIS = 3000L;
-    /** uuid -> when a space station last pulled that player back (ms). */
+    /**
+     * uuid -> when a space station last pulled that player back (ms).
+     */
     private final Map<UUID, Long> stationRescues = new HashMap<>();
-    /** A station only rescues a player this often, so a bad spot can't loop (ms). */
+    /**
+     * A station only rescues a player this often, so a bad spot can't loop (ms).
+     */
     private static final long STATION_RESCUE_COOLDOWN_MILLIS = 2000L;
 
-    /** Anti-chat-spam: how long a player waits between messages (ms). */
+    /**
+     * Anti-chat-spam: how long a player waits between messages (ms).
+     */
     private static final long CHAT_SPAM_MILLIS = 1500;
-    /** Shortest gap between two "you were mentioned" pings for one player. */
+    /**
+     * Shortest gap between two "you were mentioned" pings for one player.
+     */
     private static final long MENTION_COOLDOWN_MILLIS = 3000;
 
-    /** Mobs don't spawn within this many blocks of a player who turned mob spawning off. */
+    /**
+     * Mobs don't spawn within this many blocks of a player who turned mob spawning off.
+     */
     private static final double MOB_SPAWN_SHIELD = 24.0;
 
-    /** Last private-message partner per player, for /r. */
+    /**
+     * Last private-message partner per player, for /r.
+     */
     private final Map<UUID, UUID> replyTargets = new HashMap<>();
 
-    /** Pending teleport requests, keyed by the player who must answer them. */
+    /**
+     * Pending teleport requests, keyed by the player who must answer them.
+     */
     private final Map<UUID, TpaRequest> tpaRequests = new HashMap<>();
 
-    /** How long a teleport request stays valid (ms). */
+    /**
+     * How long a teleport request stays valid (ms).
+     */
     private static final long TPA_EXPIRY_MILLIS = 60_000;
 
-    /** One pending teleport request: who asked, and which way they want to move. */
+    /**
+     * One pending teleport request: who asked, and which way they want to move.
+     */
     private record TpaRequest(UUID from, String fromName, boolean here, long at) {
     }
 
-    /** Players with a pending /myp rename prompt: player UUID -> lowercase world name. */
+    /**
+     * Players with a pending /myp rename prompt: player UUID -> lowercase world name.
+     */
     private final Map<UUID, String> pendingRenames = new HashMap<>();
 
-    /** Players with a pending sell prompt: player UUID -> lowercase world name. */
+    /**
+     * Players with a pending sell prompt: player UUID -> lowercase world name.
+     */
     private final Map<UUID, String> pendingSells = new HashMap<>();
 
-    /** Players with a pending planet-delete confirmation: player UUID -> world name. */
+    /**
+     * Players with a pending planet-delete confirmation: player UUID -> world name.
+     */
     private final Map<UUID, String> pendingDeletes = new HashMap<>();
 
-    /** Players part-way through editing a lobby: player UUID -> the pending edit. */
+    /**
+     * Players part-way through editing a lobby: player UUID -> the pending edit.
+     */
     private final Map<UUID, PendingLobbyEdit> pendingLobbyEdits = new HashMap<>();
 
-    /** Which lobby field a chat prompt is filling in. */
-    private enum LobbyEditKind { NAME, DESCRIPTION, SLOT }
+    /**
+     * Which lobby field a chat prompt is filling in.
+     */
+    private enum LobbyEditKind {NAME, DESCRIPTION, SLOT}
 
-    /** A lobby edit waiting for its answer in chat. */
+    /**
+     * A lobby edit waiting for its answer in chat.
+     */
     private record PendingLobbyEdit(String lobbyId, LobbyEditKind kind) {
     }
 
-    /** One entry of the LOBBIES menu (opened by /lobby, /hub and /l). */
+    /**
+     * One entry of the LOBBIES menu (opened by /lobby, /hub and /l).
+     */
     public record Lobby(String id, String name, Material icon, String worldName,
                         Integer slot,
                         Double x, Double y, Double z, Double yaw, Double pitch,
                         String description) {
 
-        /** Whether the admin pinned a landing spot with /lobby setlanding. */
+        /**
+         * Whether the admin pinned a landing spot with /lobby setlanding.
+         */
         public boolean hasLanding() {
             return x != null && y != null && z != null;
         }
 
-        /** The destination: the pinned landing spot, or the world spawn when unset. */
+        /**
+         * The destination: the pinned landing spot, or the world spawn when unset.
+         */
         public Location location() {
             World world = Bukkit.getWorld(worldName);
             if (world == null) {
@@ -241,7 +315,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Decoration item pinned in the last slot of the LOBBIES menu (config "lobbies-info"). */
+    /**
+     * Decoration item pinned in the last slot of the LOBBIES menu (config "lobbies-info").
+     */
     public record LobbyInfo(String name, Material icon, List<String> lore) {
     }
 
@@ -254,67 +330,109 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     record HudMode(String label, String template) {
     }
 
-    /** The HUD lines used when config.yml lists none (the shipped defaults). */
+    /**
+     * The HUD lines used when config.yml lists none (the shipped defaults).
+     */
     private static final List<HudMode> DEFAULT_HUD_MODES = List.of(
             new HudMode("Planet only", "\uD83E\uDE90 %planet%"),
             new HudMode("Planet + balance", "\uD83E\uDE90 %planet%  \u00B7  \uD83D\uDCB0 %balance% VPL"),
             new HudMode("Planet + coordinates", "\uD83E\uDE90 %planet%  \u00B7  \uD83D\uDCCD %x%, %y%, %z%"));
 
-    /** Continuous environment traits (weather lock, atmospheres, disabled dimensions). */
+    /**
+     * Continuous environment traits (weather lock, atmospheres, disabled dimensions).
+     */
     private final PlanetEnvironment environment = new PlanetEnvironment(this);
 
-    /** The planet soundtrack behind the "Planet Music" toggle in /settings. */
+    /**
+     * The planet soundtrack behind the "Planet Music" toggle in /settings.
+     */
     private final PlanetMusic music = new PlanetMusic(this);
 
-    /** The sidebar scoreboard (right of the screen) behind /settings → Sidebar. */
+    /**
+     * The sidebar scoreboard (right of the screen) behind /settings → Sidebar.
+     */
     private final SidebarScoreboard sidebar = new SidebarScoreboard(this);
 
-    /** Persistent per-player data center: balance, NEB, playtime, planets, homes, settings. */
+    /**
+     * Persistent per-player data center: balance, NEB, playtime, planets, homes, settings.
+     */
     private IPlayerDataStore playerData;
 
-    /** ProtocolLib-based true sky tinting, or null when ProtocolLib is absent. */
+    /**
+     * ProtocolLib-based true sky tinting, or null when ProtocolLib is absent.
+     */
     private PlanetSkyPackets skyPackets;
 
-    /** The HUD lines players can cycle through (config: {@code hud.modes}). */
+    /**
+     * The HUD lines players can cycle through (config: {@code hud.modes}).
+     */
     private List<HudMode> hudModes = DEFAULT_HUD_MODES;
 
-    /** Friends, requests, presence, gifts and the activity feed (friends.yml). */
+    /**
+     * Friends, requests, presence, gifts and the activity feed (friends.yml).
+     */
     private FriendSystem friendSystem;
-    /** Routing for {@code /friend} and {@code /friends}. */
+    /**
+     * Routing for {@code /friend} and {@code /friends}.
+     */
     private FriendCommand friendCommand;
 
-    /** The Entity Card Hunt: cards, drops, collection and event timer. */
+    /**
+     * The Entity Card Hunt: cards, drops, collection and event timer.
+     */
     private CardService cardService;
-    /** Routing for {@code /cards}, {@code /c} and {@code /cardeventduration}. */
+    /**
+     * Routing for {@code /cards}, {@code /c} and {@code /cardeventduration}.
+     */
     private CardsCommand cardsCommand;
 
-    /** The Casino: its games, records, prizes and achievements (casino.yml). */
+    /**
+     * The Casino: its games, records, prizes and achievements (casino.yml).
+     */
     private CasinoManager casino;
-    /** Routing for {@code /casino} and {@code /gambling}. */
+    /**
+     * Routing for {@code /casino} and {@code /gambling}.
+     */
     private CasinoCommand casinoCommand;
 
-    /** Personal music (/music): on-demand songs and small playlists (player-music.yml). */
+    /**
+     * Personal music (/music): on-demand songs and small playlists (player-music.yml).
+     */
     private PlayerMusic playerMusic;
 
-    /** Space travel: the ship, the star chart and the fog of war (/ship). */
+    /**
+     * Space travel: the ship, the star chart and the fog of war (/ship).
+     */
     private SpaceTravel spaceTravel;
 
-    /** The space world itself: the ship and one landing pad per planet. */
+    /**
+     * The space world itself: the ship and one landing pad per planet.
+     */
     private SpaceWorld spaceWorld;
 
-    /** The piloting sessions: players flying their ship right now. */
+    /**
+     * The piloting sessions: players flying their ship right now.
+     */
     private ShipPilot shipPilot;
 
-    /** Keeps the space world's ship and pads intact, and remembers who is
-     * allowed to edit them ({@code /ship edit}). */
+    /**
+     * Keeps the space world's ship and pads intact, and remembers who is
+     * allowed to edit them ({@code /ship edit}).
+     */
     private SpaceGuard spaceGuard;
 
-    /** Procedural planet profiles and the world-generation engine behind them. */
+    /**
+     * Procedural planet profiles and the world-generation engine behind them.
+     */
     private PlanetGeneration generation;
-    /** The per-planet experience layer (resource packs, client hooks, events). */
+    /**
+     * The per-planet experience layer (resource packs, client hooks, events).
+     */
     private PlanetFeatureManager features;
 
-    /** The planet designer's filters from config.yml, read on every reload. */
+    /**
+     * The planet designer's filters from config.yml, read on every reload.
+     */
     private List<PlanetDesign.Filter> designFilters = List.of();
 
     /**
@@ -837,7 +955,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             }
 
             // Drop the tracked effect set so leaving a planet only ever strips the
-                // effects this plugin applied (and doesn't leak entries for old logins).
+            // effects this plugin applied (and doesn't leak entries for old logins).
             @EventHandler
             public void onPlayerQuit(PlayerQuitEvent event) {
                 UUID quitter = event.getPlayer().getUniqueId();
@@ -1230,6 +1348,15 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 Bukkit.getScheduler().runTask(Planets.this, () -> applyRename(player, worldName, newName));
             }
         }, this);
+
+        var provider = Bukkit.getServicesManager().getRegistration(IPlayerDataService.class);
+        if (provider == null) {
+            getLogger().severe("Failed to load IPlayerDataService — plugin cannot run.");
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+
+        playerDataService = new PlayerDataServiceWrapper(this, provider, sidebar);
     }
 
     @Override
@@ -1268,6 +1395,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             homeManager.save();
         }
         sidebar.shutdown();
+
+        if (playerDataService != null) {
+            playerDataService.onShutdown();
+        }
     }
 
     @Override
@@ -2086,21 +2217,27 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return suggestions;
     }
 
-    /** Keeps the entries of a suggestion list that start with what's typed. */
+    /**
+     * Keeps the entries of a suggestion list that start with what's typed.
+     */
     private static List<String> match(List<String> options, String lowerPrefix) {
         return options.stream()
                 .filter(option -> option.toLowerCase(Locale.ROOT).startsWith(lowerPrefix))
                 .toList();
     }
 
-    /** Adds one option to a suggestion list when it starts with what's typed. */
+    /**
+     * Adds one option to a suggestion list when it starts with what's typed.
+     */
     private static void add(List<String> suggestions, String lowerPrefix, String option) {
         if (option.toLowerCase(Locale.ROOT).startsWith(lowerPrefix)) {
             suggestions.add(option);
         }
     }
 
-    /** Where a planet name is expected: the names themselves, plus the next word of a long one. */
+    /**
+     * Where a planet name is expected: the names themselves, plus the next word of a long one.
+     */
     private List<String> planetArgSuggestions(Player player, String[] args, String prefix) {
         List<String> suggestions = new ArrayList<>(planetNameSuggestions(prefix));
         for (String continuation : planetNameContinuations(player, args, prefix)) {
@@ -2148,13 +2285,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return suggestions;
     }
 
-    /** The names of everyone with a pending teleport request to this player. */
+    /**
+     * The names of everyone with a pending teleport request to this player.
+     */
     private List<String> tpaRequesterNames(Player player) {
         TpaRequest request = tpaRequests.get(player.getUniqueId());
         return request == null ? List.of() : List.of(request.fromName());
     }
 
-    /** Material suggestions for "/planets icon" (and the lobby icon commands). */
+    /**
+     * Material suggestions for "/planets icon" (and the lobby icon commands).
+     */
     static List<String> iconMaterialNames() {
         List<String> names = new ArrayList<>();
         names.add("reset");
@@ -2215,7 +2356,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** Whether a world name matches a command argument ("_" and " " are the same). */
+    /**
+     * Whether a world name matches a command argument ("_" and " " are the same).
+     */
     private static boolean worldNameMatches(String worldName, String query) {
         String wanted = query.trim();
         return worldName.equalsIgnoreCase(wanted)
@@ -2241,7 +2384,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** A resolved "/planets world &lt;planet&gt; ..." target and the name to show it by. */
+    /**
+     * A resolved "/planets world &lt;planet&gt; ..." target and the name to show it by.
+     */
     private record WorldTarget(World world, String label) {
     }
 
@@ -2307,7 +2452,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** Names a property change target: "test (world 'normal')" when the two differ. */
+    /**
+     * Names a property change target: "test (world 'normal')" when the two differ.
+     */
     private static String worldLabel(String display, String worldName) {
         if (display == null || display.isBlank() || worldNameMatches(worldName, display)) {
             return worldName;
@@ -2346,13 +2493,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return matches;
     }
 
-    /** Flattens a world name or query for comparison: lowercase, separators, namespace. */
+    /**
+     * Flattens a world name or query for comparison: lowercase, separators, namespace.
+     */
     private static String normalizeWorldQuery(String name) {
         String flat = name.toLowerCase(Locale.ROOT).replace('_', ' ').replace('-', ' ').trim();
         return flat.startsWith("minecraft:") ? flat.substring("minecraft:".length()) : flat;
     }
 
-    /** Whether a candidate name is worth suggesting for a query: prefix, part or typo. */
+    /**
+     * Whether a candidate name is worth suggesting for a query: prefix, part or typo.
+     */
     private static boolean closeEnough(String wanted, String candidate) {
         if (wanted.isEmpty() || candidate.isEmpty()) {
             return false;
@@ -2364,7 +2515,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 || editDistance(wanted, candidate) <= 2;
     }
 
-    /** Levenshtein distance, used only for the "did you mean" hints. */
+    /**
+     * Levenshtein distance, used only for the "did you mean" hints.
+     */
     private static int editDistance(String a, String b) {
         int[] previous = new int[b.length() + 1];
         int[] current = new int[b.length() + 1];
@@ -2578,7 +2731,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * "/planets create &lt;name&gt; moon" builds a moon planet with exactly the
      * generation a buyer would get.
      */
-    /** The full planet profile with this id, when the argument names one exactly. */
+    /**
+     * The full planet profile with this id, when the argument names one exactly.
+     */
     private PlanetProfile profileGeneration(String id) {
         if (generation == null || id == null || id.isBlank()) {
             return null;
@@ -2712,17 +2867,23 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** Whether {@code id} is a generation this server can build (preset or archetype). */
+    /**
+     * Whether {@code id} is a generation this server can build (preset or archetype).
+     */
     private boolean isGeneration(String id) {
         return generationSpec(id) != null || profileGeneration(id) != null;
     }
 
-    /** Op, or a permission plugin granting planets.admin — the diagnostic commands. */
+    /**
+     * Op, or a permission plugin granting planets.admin — the diagnostic commands.
+     */
     private boolean canUseGenerationTools(CommandSender sender) {
         return sender.isOp() || sender.hasPermission("planets.admin");
     }
 
-    /** Every generation id available, for tab completion and error messages. */
+    /**
+     * Every generation id available, for tab completion and error messages.
+     */
     private List<String> generationIds() {
         List<String> ids = new ArrayList<>(PlanetArchetypes.ids());
         ids.add("void");
@@ -2740,7 +2901,6 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
         return ids;
     }
-
 
 
     /**
@@ -2795,7 +2955,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * after a restart.
      *
      * @return the new world, or {@code null} when creation fails (for example
-     *         when a folder with that name is already on disk).
+     * when a folder with that name is already on disk).
      */
     private World createPlanetWorld(String worldName, PlanetTerrain.Spec spec) {
         return createPlanetWorld(worldName, spec, structuresEnabled(worldName));
@@ -2877,15 +3037,21 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Generation previews (throwaway worlds) ──────────────────────────
 
-    /** Where each admin was standing before entering a preview world. */
+    /**
+     * Where each admin was standing before entering a preview world.
+     */
     private final Map<UUID, Location> previewReturn = new HashMap<>();
 
-    /** Preview world names, remembered so they stay invisible and get cleaned up. */
+    /**
+     * Preview world names, remembered so they stay invisible and get cleaned up.
+     */
     private List<String> previewWorldNames() {
         return new ArrayList<>(getConfig().getStringList("preview-worlds"));
     }
 
-    /** Whether a world is a temporary generation preview. */
+    /**
+     * Whether a world is a temporary generation preview.
+     */
     private boolean isPreviewWorld(String worldName) {
         for (String name : previewWorldNames()) {
             if (name.equalsIgnoreCase(worldName)) {
@@ -2897,7 +3063,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Pending planets (created by an admin, not published yet) ─────────
 
-    /** The worlds waiting to be confirmed, in the order they were created. */
+    /**
+     * The worlds waiting to be confirmed, in the order they were created.
+     */
     List<String> pendingWorlds() {
         ConfigurationSection section = getConfig().getConfigurationSection("pending-worlds");
         return section == null ? List.of() : new ArrayList<>(section.getKeys(false));
@@ -2912,13 +3080,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return worldName != null && containsIgnoreCase(pendingWorlds(), worldName);
     }
 
-    /** When a pending world was created, or {@code 0} when it was never recorded. */
+    /**
+     * When a pending world was created, or {@code 0} when it was never recorded.
+     */
     private long pendingSince(String worldName) {
         ConfigurationSection section = getConfig().getConfigurationSection("pending-worlds");
         return section == null ? 0L : section.getLong(worldName, 0L);
     }
 
-    /** Marks a freshly created world as pending, so it stays out of the /p menu. */
+    /**
+     * Marks a freshly created world as pending, so it stays out of the /p menu.
+     */
     private void markPending(String worldName) {
         if (worldName == null || worldName.isBlank() || isPendingWorld(worldName)) {
             return;
@@ -2927,7 +3099,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         saveConfigQuietly();
     }
 
-    /** Tells the creator of a new planet how to publish or throw it away. */
+    /**
+     * Tells the creator of a new planet how to publish or throw it away.
+     */
     private void announcePending(Player player, String worldName) {
         player.sendMessage(Component.text("\u23F3 ").color(NamedTextColor.YELLOW)
                 .append(Component.text(worldName).color(NamedTextColor.YELLOW))
@@ -2961,7 +3135,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** How long an unconfirmed planet is kept, in hours ({@code 0} = forever). */
+    /**
+     * How long an unconfirmed planet is kept, in hours ({@code 0} = forever).
+     */
     private long pendingExpiryHours() {
         return Math.max(0L, getConfig().getLong("pending-planets.expire-hours", 24L));
     }
@@ -3031,7 +3207,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return true;
     }
 
-    /** Deletes a pending world and forgets everything recorded about it. */
+    /**
+     * Deletes a pending world and forgets everything recorded about it.
+     */
     private void deletePendingWorld(String worldName) {
         deleteWorldNow(worldName);
         clearWorldConfig(worldName);
@@ -3075,7 +3253,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Lists the planets waiting for confirmation, with their age. */
+    /**
+     * Lists the planets waiting for confirmation, with their age.
+     */
     void listPending(CommandSender sender) {
         List<String> pending = pendingWorlds();
         if (pending.isEmpty()) {
@@ -3089,7 +3269,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         for (String worldName : pending) {
             sender.sendMessage(Component.text("  " + worldName).color(NamedTextColor.WHITE)
                     .append(Component.text(" — created " + pendingAge(pendingSince(worldName))
-                            + (hours > 0 ? ", deleted after " + hours + "h unconfirmed" : ""))
+                                    + (hours > 0 ? ", deleted after " + hours + "h unconfirmed" : ""))
                             .color(NamedTextColor.GRAY)));
         }
         sender.sendMessage(Component.text("Publish with ").color(NamedTextColor.GRAY)
@@ -3099,7 +3279,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(".").color(NamedTextColor.GRAY)));
     }
 
-    /** {@code 12m ago} / {@code 3h ago} / {@code 2d ago}, for the pending list. */
+    /**
+     * {@code 12m ago} / {@code 3h ago} / {@code 2d ago}, for the pending list.
+     */
     private static String pendingAge(long since) {
         if (since <= 0) {
             return "an unknown time ago";
@@ -3197,7 +3379,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(" to discard it and come back.").color(NamedTextColor.GRAY)));
     }
 
-    /** Deletes every preview world and sends the admin back where they started. */
+    /**
+     * Deletes every preview world and sends the admin back where they started.
+     */
     private void endPreviews(Player player) {
         List<String> previews = previewWorldNames();
         if (previews.isEmpty()) {
@@ -3264,7 +3448,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return Bukkit.getWorld(worldName) == null;
     }
 
-    /** Forgets every per-world setting of a world that is being thrown away. */
+    /**
+     * Forgets every per-world setting of a world that is being thrown away.
+     */
     private void clearWorldConfig(String worldName) {
         getConfig().set("icons." + worldName, null);
         getConfig().set("station-worlds." + worldName, null);
@@ -3531,7 +3717,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return Math.max(0, getConfig().getInt("my-planet.max-custom-planets", 1));
     }
 
-    /** Whether the player may still buy a custom-generation planet. */
+    /**
+     * Whether the player may still buy a custom-generation planet.
+     */
     boolean canBuyCustomPlanet(Player player) {
         int max = maxCustomPlanets();
         if (max == 0) {
@@ -3731,7 +3919,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return candidate;
     }
 
-    /** First free name for the base: "base", then "base_2", "base_3", ... */
+    /**
+     * First free name for the base: "base", then "base_2", "base_3", ...
+     */
     private String firstFreePlanetName(String base, String skipExact) {
         String candidate = base;
         int n = 2;
@@ -3782,7 +3972,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** The directory called {@code name} inside {@code dir}, ignoring case. */
+    /**
+     * The directory called {@code name} inside {@code dir}, ignoring case.
+     */
     private static File folderIn(File dir, String name) {
         if (dir == null || !dir.isDirectory()) {
             return null;
@@ -3802,7 +3994,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** Creates a brand-new planet world with the archetype's unique terrain. */
+    /**
+     * Creates a brand-new planet world with the archetype's unique terrain.
+     */
     private World createDefaultPlanetWorld(String worldName, PlanetArchetypes.Archetype archetype) {
         return createPlanetWorld(worldName, archetype == null ? null : archetype.terrain());
     }
@@ -3895,10 +4089,12 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text("', type '").color(NamedTextColor.YELLOW))
                 .append(Component.text(worldName).color(NamedTextColor.GREEN))
                 .append(Component.text("' in chat. Type ").color(NamedTextColor.YELLOW))
-                .append(Component.text("cancel").color(NamedTextColor.RED))                .append(Component.text("to abort.").color(NamedTextColor.YELLOW)));
+                .append(Component.text("cancel").color(NamedTextColor.RED)).append(Component.text("to abort.").color(NamedTextColor.YELLOW)));
     }
 
-    /** Recursively deletes a world folder and all its children on disk. */
+    /**
+     * Recursively deletes a world folder and all its children on disk.
+     */
     private void deleteWorldFolder(File folder) {
         if (!folder.exists()) return;
         File[] children = folder.listFiles();
@@ -3910,7 +4106,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         folder.delete();
     }
 
-    /** Stores a fixed landing spot for a world (used by "point" landing mode). */
+    /**
+     * Stores a fixed landing spot for a world (used by "point" landing mode).
+     */
     private void saveLandingSpot(String worldName, Location location) {
         getConfig().set("landing-spots." + worldName + ".x", location.getX());
         getConfig().set("landing-spots." + worldName + ".y", location.getY());
@@ -3924,7 +4122,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return spot != null && spot.contains("x") && spot.contains("y") && spot.contains("z");
     }
 
-    /** World names (lowercase) that require the planets.tp.&lt;world&gt; permission. */
+    /**
+     * World names (lowercase) that require the planets.tp.&lt;world&gt; permission.
+     */
     private Set<String> lockedWorlds() {
         Set<String> locked = new HashSet<>();
         for (String worldName : getConfig().getStringList("locked-worlds")) {
@@ -3933,7 +4133,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return locked;
     }
 
-    /** Whether the player may teleport to this planet (locked planets need an explicit permission). */
+    /**
+     * Whether the player may teleport to this planet (locked planets need an explicit permission).
+     */
     boolean canVisit(Player player, Planet planet) {
         String key = planet.worldName().toLowerCase(Locale.ROOT);
         return !lockedWorlds().contains(key) || hasVisitPermission(player, key);
@@ -4060,7 +4262,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Applies the lock immediately: stores it, confirms, evicts and announces. */
+    /**
+     * Applies the lock immediately: stores it, confirms, evicts and announces.
+     */
     private void lockPlanetNow(Player actor, Planet planet) {
         List<String> locked = new ArrayList<>(getConfig().getStringList("locked-worlds"));
         String worldName = planet.worldName();
@@ -4094,11 +4298,15 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         countdown.runTaskTimer(this, 20L, 20L);
     }
 
-    /** Live snapshot of a running lock countdown, shown in the planets menu. */
+    /**
+     * Live snapshot of a running lock countdown, shown in the planets menu.
+     */
     record PendingLockInfo(String actorName, int remainingSeconds) {
     }
 
-    /** One planet's lock countdown: ticks down, then applies the lock. */
+    /**
+     * One planet's lock countdown: ticks down, then applies the lock.
+     */
     private static final class PendingLock extends BukkitRunnable {
         private final Planets plugin;
         private final Player actor;
@@ -4129,13 +4337,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Whether a lock countdown is running for a planet, and its details. */
+    /**
+     * Whether a lock countdown is running for a planet, and its details.
+     */
     PendingLockInfo pendingLockInfo(String worldKey) {
         PendingLock pending = pendingLocks.get(worldKey.toLowerCase(Locale.ROOT));
         return pending == null ? null : new PendingLockInfo(pending.actorName, pending.remaining);
     }
 
-    /** One-time chat warning to everyone currently standing on the planet. */
+    /**
+     * One-time chat warning to everyone currently standing on the planet.
+     */
     private void warnOccupants(Planet planet, Player actor, int seconds) {
         World world = Bukkit.getWorld(planet.worldName());
         if (world == null) {
@@ -4152,7 +4364,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Per-second action-bar countdown for everyone still on the planet. */
+    /**
+     * Per-second action-bar countdown for everyone still on the planet.
+     */
     private void showCountdown(Planet planet, int remaining) {
         World world = Bukkit.getWorld(planet.worldName());
         if (world == null) {
@@ -4255,12 +4469,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Teleports the player to the hub and explains why. */
+    /**
+     * Teleports the player to the hub and explains why.
+     */
     private void relocate(Player player, Planet planet, String reason) {
         relocate(player, planet.name(), planet.worldName(), reason);
     }
 
-    /** Teleports the player to the hub and explains why (works without a Planet object). */
+    /**
+     * Teleports the player to the hub and explains why (works without a Planet object).
+     */
     private void relocate(Player player, String planetName, String worldName, String reason) {
         Location hub = hubLocation(worldName);
         if (hub == null) {
@@ -4285,7 +4503,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return hubLocation(from.worldName());
     }
 
-    /** Where locked-out players are sent, given the world they are leaving. */
+    /**
+     * Where locked-out players are sent, given the world they are leaving.
+     */
     private Location hubLocation(String fromWorldName) {
         String hubName = getConfig().getString("middle-earth-world", "Middle_earth");
         if (!hubName.equalsIgnoreCase(fromWorldName)) {
@@ -4308,7 +4528,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** Property keywords accepted by "/planets world". */
+    /**
+     * Property keywords accepted by "/planets world".
+     */
     private static final List<String> WORLD_PROPERTIES = List.of(
             "time", "clear", "sun", "rain", "storm", "thunder",
             "tick-speed", "tickspeed", "tick_speed", "gamerule", "pvp", "difficulty",
@@ -4317,10 +4539,14 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             "weather", "effect", "atmosphere", "dimensions", "sky", "particles",
             "day-cycle", "weather-cycle", "status", "terrain", "structures");
 
-    /** The spawn-limit properties, and the config keys their values are saved under. */
+    /**
+     * The spawn-limit properties, and the config keys their values are saved under.
+     */
     private static final List<String> SPAWN_LIMIT_PROPERTIES = List.of("monsters", "animals", "ambient", "water");
 
-    /** The player-facing label of a spawn-limit property. */
+    /**
+     * The player-facing label of a spawn-limit property.
+     */
     private static String spawnLimitLabel(String property) {
         return switch (property) {
             case "monsters" -> "Monster";
@@ -4346,7 +4572,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** What a world's spawn limit reads back as: a count, or the server's own setting. */
+    /**
+     * What a world's spawn limit reads back as: a count, or the server's own setting.
+     */
     private static String spawnLimitText(World world, String property) {
         int count = switch (property) {
             case "monsters" -> world.getMonsterSpawnLimit();
@@ -4383,7 +4611,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         saveConfigQuietly();
     }
 
-    /** Re-applies the spawn limits saved for a world (used whenever a world loads). */
+    /**
+     * Re-applies the spawn limits saved for a world (used whenever a world loads).
+     */
     private void restoreSpawnLimits(World world) {
         ConfigurationSection limits = getConfig().getConfigurationSection("spawn-limits");
         ConfigurationSection saved = limits == null ? null : limits.getConfigurationSection(world.getName());
@@ -4512,7 +4742,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     player.sendMessage(Component.text("Random tick speed on ").color(NamedTextColor.GREEN)
                             .append(Component.text(planetName).color(NamedTextColor.YELLOW))
                             .append(Component.text(" is " + (current == null ? "0" : current)
-                                    + ". Change it with /planets world <planet> tick-speed <count>.")
+                                            + ". Change it with /planets world <planet> tick-speed <count>.")
                                     .color(NamedTextColor.GREEN)));
                     return;
                 }
@@ -4531,7 +4761,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                             .append(Component.text(planetName).color(NamedTextColor.YELLOW))
                             .append(Component.text(" set to " + actual + ".").color(NamedTextColor.GREEN)));
                     player.sendMessage(Component.text("Random tick speed is what crops, grass and leaves use"
-                            + " their random updates for — it does not change how fast the world runs.")
+                                    + " their random updates for — it does not change how fast the world runs.")
                             .color(NamedTextColor.GRAY));
                     logWorldChange(player, world.getName(), "tick-speed", actual);
                 } catch (NumberFormatException ex) {
@@ -4612,7 +4842,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 if (values.length == 0) {
                     statusLine(player, label + " spawn limit", spawnLimitText(world, property));
                     player.sendMessage(Component.text("Usage: /planets world <planet> " + property
-                            + " <count|on|off> — 'on' uses the server's own setting, 'off' disables them")
+                                    + " <count|on|off> — 'on' uses the server's own setting, 'off' disables them")
                             .color(NamedTextColor.YELLOW));
                     return;
                 }
@@ -5173,7 +5403,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Value suggestions for a given world property, for tab completion. */
+    /**
+     * Value suggestions for a given world property, for tab completion.
+     */
     private static List<String> worldPropertyValues(String property, String prefix) {
         List<String> values = switch (property) {
             case "pvp" -> List.of("true", "false");
@@ -5212,14 +5444,18 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .toList();
     }
 
-    /** One line of the "/planets world <planet> status" overview. */
+    /**
+     * One line of the "/planets world <planet> status" overview.
+     */
     private void statusLine(Player player, String label, String value) {
         player.sendMessage(Component.text("• ").color(NamedTextColor.GRAY)
                 .append(Component.text(label + ": ").color(NamedTextColor.GRAY))
                 .append(Component.text(value).color(NamedTextColor.YELLOW)));
     }
 
-    /** Prints an overview of all planet commands the sender may use. */
+    /**
+     * Prints an overview of all planet commands the sender may use.
+     */
     private void showHelp(CommandSender sender) {
         sender.sendMessage(Component.text("— Planets commands —").color(NamedTextColor.GOLD));
 
@@ -5325,7 +5561,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 "shows, sets or restores the world borders of the public planets");
     }
 
-    /** Group heading in the help output, shown only if the sender holds one of the permissions. */
+    /**
+     * Group heading in the help output, shown only if the sender holds one of the permissions.
+     */
     private void helpGroup(CommandSender sender, String title, String... permissions) {
         for (String permission : permissions) {
             if (sender.hasPermission(permission)) {
@@ -5335,7 +5573,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** One line of the help output, shown only to senders with the permission. */
+    /**
+     * One line of the help output, shown only to senders with the permission.
+     */
     private void helpLine(CommandSender sender, String permission, String usage, String description) {
         if (!sender.hasPermission(permission)) {
             return;
@@ -5346,7 +5586,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(description).color(NamedTextColor.GRAY)));
     }
 
-    /** Saves config.yml, swallowing the (impossible on a loaded config) failure. */
+    /**
+     * Saves config.yml, swallowing the (impossible on a loaded config) failure.
+     */
     public void saveConfigQuietly() {
         try {
             saveConfig();
@@ -5403,7 +5645,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         saveConfigQuietly();
     }
 
-    /** Writes one default lobby entry (with its pinned menu slot) into the config. */
+    /**
+     * Writes one default lobby entry (with its pinned menu slot) into the config.
+     */
     private void setDefaultLobby(String id, String name, String world, String icon, int slot) {
         String path = "lobbies." + id;
         getConfig().set(path + ".name", name);
@@ -5416,7 +5660,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         getConfig().set(path + ".slot", slot);
     }
 
-    /** Sets the menu slot for an existing default lobby, only if it has none yet. */
+    /**
+     * Sets the menu slot for an existing default lobby, only if it has none yet.
+     */
     private void ensureDefaultSlot(String id, int slot) {
         ConfigurationSection entry = getConfig().getConfigurationSection("lobbies." + id);
         if (entry != null && !entry.contains("slot")) {
@@ -5424,7 +5670,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Opens the LOBBIES menu for the player. */
+    /**
+     * Opens the LOBBIES menu for the player.
+     */
     private void openLobbies(Player player) {
         List<Lobby> lobbies = availableLobbies();
         if (lobbies.isEmpty() && lobbyInfo() == null) {
@@ -5497,7 +5745,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return lobbies;
     }
 
-    /** "Middle_earth" → "Middle Earth", "world" → "World". */
+    /**
+     * "Middle_earth" → "Middle Earth", "world" → "World".
+     */
     private static String humanizeWorldName(String worldName) {
         StringBuilder result = new StringBuilder();
         for (String word : worldName.replace('_', ' ').split("\\s+")) {
@@ -5512,7 +5762,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return result.toString();
     }
 
-    /** Icon for a lobby world with no explicit choice: block matching its environment. */
+    /**
+     * Icon for a lobby world with no explicit choice: block matching its environment.
+     */
     private Material defaultLobbyIcon(String worldName) {
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
@@ -5525,7 +5777,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         };
     }
 
-    /** Finds a lobby by its id, display name or world name. */
+    /**
+     * Finds a lobby by its id, display name or world name.
+     */
     private Lobby findLobby(String query) {
         for (Lobby lobby : availableLobbies()) {
             if (lobby.id().equalsIgnoreCase(query)
@@ -5537,7 +5791,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** Decoration item pinned in the last slot of the LOBBIES menu. */
+    /**
+     * Decoration item pinned in the last slot of the LOBBIES menu.
+     */
     LobbyInfo lobbyInfo() {
         ConfigurationSection info = getConfig().getConfigurationSection("lobbies-info");
         if (info == null) {
@@ -5551,7 +5807,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return new LobbyInfo(name, icon, info.getStringList("lore"));
     }
 
-    /** Teleports the player to a lobby's landing spot (or its world spawn when unset). */
+    /**
+     * Teleports the player to a lobby's landing spot (or its world spawn when unset).
+     */
     void teleportToLobby(Player player, Lobby lobby) {
         Location spot = lobby.location();
         if (spot == null || spot.getWorld() == null) {
@@ -5570,7 +5828,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(".").color(NamedTextColor.GREEN)));
     }
 
-    /** Routes /lobby's subcommands; with no subcommand it opens the menu or teleports. */
+    /**
+     * Routes /lobby's subcommands; with no subcommand it opens the menu or teleports.
+     */
     private void handleLobbyCommand(Player player, String[] args) {
         if (args.length == 0) {
             openLobbies(player);
@@ -5614,7 +5874,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Handles "/lobby create <name> [material]": creates a brand-new world for the lobby. */
+    /**
+     * Handles "/lobby create <name> [material]": creates a brand-new world for the lobby.
+     */
     private void lobbyCreate(Player player, String[] args) {
         if (!player.hasPermission("planets.create")) {
             player.sendMessage(Component.text("You don't have permission to create lobbies.").color(NamedTextColor.RED));
@@ -5677,7 +5939,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         registerCreatedLobby(player, id, name, icon);
     }
 
-    /** Registers a freshly created world as a lobby and teleports the admin into it. */
+    /**
+     * Registers a freshly created world as a lobby and teleports the admin into it.
+     */
     private void registerCreatedLobby(Player player, String id, String name, Material icon) {
         String path = "lobbies." + id;
         getConfig().set(path + ".name", name);
@@ -5704,7 +5968,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Handles "/lobby setlanding <name>": pins the player's position as the lobby's landing spot. */
+    /**
+     * Handles "/lobby setlanding <name>": pins the player's position as the lobby's landing spot.
+     */
     private void lobbySetLanding(Player player, String[] args) {
         if (!player.hasPermission("planets.landing")) {
             player.sendMessage(Component.text("You don't have permission to change where players land.").color(NamedTextColor.RED));
@@ -5741,7 +6007,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text("'. Players clicking it will arrive here.").color(NamedTextColor.GREEN)));
     }
 
-    /** Handles "/lobby icon <name> <material|reset>": changes the lobby's menu block. */
+    /**
+     * Handles "/lobby icon <name> <material|reset>": changes the lobby's menu block.
+     */
     private void lobbyIcon(Player player, String[] args) {
         if (!player.hasPermission("planets.icon")) {
             player.sendMessage(Component.text("You don't have permission to change lobby icons.").color(NamedTextColor.RED));
@@ -5785,7 +6053,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(".").color(NamedTextColor.GREEN)));
     }
 
-    /** Handles "/lobby delete <name>": removes a lobby from the menu. */
+    /**
+     * Handles "/lobby delete <name>": removes a lobby from the menu.
+     */
     private void lobbyDelete(Player player, String[] args) {
         if (!player.hasPermission("planets.delete")) {
             player.sendMessage(Component.text("You don't have permission to delete lobbies.").color(NamedTextColor.RED));
@@ -5807,7 +6077,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         deleteLobbyNow(player, lobby);
     }
 
-    /** Handles "/lobby list": prints every lobby and its landing spot. */
+    /**
+     * Handles "/lobby list": prints every lobby and its landing spot.
+     */
     private void lobbyList(Player player) {
         List<Lobby> lobbies = availableLobbies();
         if (lobbies.isEmpty()) {
@@ -5825,13 +6097,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** "The Law & Neutrals TEAM Lobby" → "the_law_neutrals_team_lobby". */
+    /**
+     * "The Law & Neutrals TEAM Lobby" → "the_law_neutrals_team_lobby".
+     */
     private static String slug(String name) {
         String slug = name.trim().toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9_\\- ]", "").replace(' ', '_');
         return slug.isEmpty() ? "lobby" : slug;
     }
 
-    /** Tab-completion for /lobby, /hub and /l. */
+    /**
+     * Tab-completion for /lobby, /hub and /l.
+     */
     private List<String> lobbyTabComplete(Player player, String[] args) {
         String prefix = args[args.length - 1].toLowerCase(Locale.ROOT);
         // The admin sub-commands follow the same gate the commands themselves use.
@@ -5897,7 +6173,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
         return List.of();
     }
-    /** Builds the planet list: "Middle Earth" pinned first, then every loaded Multiverse world. */
+
+    /**
+     * Builds the planet list: "Middle Earth" pinned first, then every loaded Multiverse world.
+     */
     List<Planet> availablePlanets() {
         String middleEarthWorld = getConfig().getString("middle-earth-world", "Middle_earth");
         Map<String, Material> overrides = iconOverrides();
@@ -5966,7 +6245,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return false;
     }
 
-    /** Remembers a deleted world so it can never appear in the menus again. */
+    /**
+     * Remembers a deleted world so it can never appear in the menus again.
+     */
     private void rememberDeletedWorld(String worldName) {
         if (isDeletedWorld(worldName)) {
             return;
@@ -5976,7 +6257,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         getConfig().set("deleted-planet-worlds", deleted);
     }
 
-    /** Whether a world was auto-created by "/lobby create" (a lobby world, not a planet). */
+    /**
+     * Whether a world was auto-created by "/lobby create" (a lobby world, not a planet).
+     */
     private boolean isCreatedLobbyWorld(String worldName) {
         ConfigurationSection section = getConfig().getConfigurationSection("lobbies");
         if (section == null) {
@@ -5994,7 +6277,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
     }
 
     /** Custom menu icons from config.yml's "icons" section, keyed by lowercase world name. */
-    /** The icon configured for a world ({@code icons.<world>}), or the fallback. */
+    /**
+     * The icon configured for a world ({@code icons.<world>}), or the fallback.
+     */
     Material planetIcon(String worldName, Material fallback) {
         if (worldName == null) {
             return fallback;
@@ -6022,10 +6307,14 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Economy (Vault) helpers ──────────────────────────────────────────
 
-    /** The Vault economy API, or null when Vault is absent. */
+    /**
+     * The Vault economy API, or null when Vault is absent.
+     */
     private net.milkbowl.vault.economy.Economy economy = null;
 
-    /** Whether any economy is available via Vault. */
+    /**
+     * Whether any economy is available via Vault.
+     */
     @Override
     public boolean hasEconomy() {
         return economy != null;
@@ -6040,21 +6329,27 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return economy;
     }
 
-    /** Get a player's money balance, or -1 when economy is not available. */
+    /**
+     * Get a player's money balance, or -1 when economy is not available.
+     */
     @Override
     public double getBalance(OfflinePlayer player) {
         if (!hasEconomy()) return -1;
         return economy.getBalance(player);
     }
 
-    /** Withdraw an amount from a player. Returns true on success. */
+    /**
+     * Withdraw an amount from a player. Returns true on success.
+     */
     boolean withdraw(Player player, double amount) {
         if (!hasEconomy()) return false;
         var response = economy.withdrawPlayer(player, amount);
         return response.transactionSuccess();
     }
 
-    /** Deposit an amount to a player. Returns true on success. */
+    /**
+     * Deposit an amount to a player. Returns true on success.
+     */
     boolean deposit(Player player, double amount) {
         if (!hasEconomy()) return false;
         var response = economy.depositPlayer(player, amount);
@@ -6063,38 +6358,56 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Balances & leaderboards ──────────────────────────────────────────
 
-    /** One leaderboard row: a known player with their VPL balance and NEB value. */
+    /**
+     * One leaderboard row: a known player with their VPL balance and NEB value.
+     */
     record LeaderboardEntry(UUID uuid, String name, double vpl, double neb) {
     }
 
-    /** Last built leaderboard, and when it was built (rebuilding is not free). */
+    /**
+     * Last built leaderboard, and when it was built (rebuilding is not free).
+     */
     private List<LeaderboardEntry> leaderboardCache = List.of();
     private long leaderboardCacheAt;
 
-    /** How long a built leaderboard stays valid, in seconds (see config.yml). */
+    /**
+     * How long a built leaderboard stays valid, in seconds (see config.yml).
+     */
     private long leaderboardCacheSeconds() {
         return Math.max(0L, getConfig().getLong("leaderboards.cache-seconds", 60L));
     }
 
-    /** The placeholder that supplies the NEB column (see config.yml). */
+    /**
+     * The placeholder that supplies the NEB column (see config.yml).
+     */
     public String nebPlaceholder() {
         return getConfig().getString("leaderboards.neb-placeholder", "%neb%");
     }
 
-    /** Whether no NEB placeholder has been configured yet (shown as a hint). */
+    /**
+     * Whether no NEB placeholder has been configured yet (shown as a hint).
+     */
     public boolean nebPlaceholderIsUnset() {
         String placeholder = nebPlaceholder();
         return placeholder == null || placeholder.isBlank() || placeholder.equals("%neb%");
     }
 
-    /** Memoized playtime per player, so the leaderboard never re-reads a data file. */
+    /**
+     * Memoized playtime per player, so the leaderboard never re-reads a data file.
+     */
     private final Map<UUID, Double> daysPlayedCache = new HashMap<>();
-    /** When each memoized playtime was read, so an old reading can expire. */
+    /**
+     * When each memoized playtime was read, so an old reading can expire.
+     */
     private final Map<UUID, Long> daysPlayedCacheAt = new HashMap<>();
-    /** How long a memoized playtime stays valid, in milliseconds. */
+    /**
+     * How long a memoized playtime stays valid, in milliseconds.
+     */
     private static final long DAYS_PLAYED_TTL_MS = 60_000L;
 
-    /** Returns the player's playtime in hours (fractional). Same source as {@link #daysPlayed(UUID)}. */
+    /**
+     * Returns the player's playtime in hours (fractional). Same source as {@link #daysPlayed(UUID)}.
+     */
     @Override
     public double hoursPlayed(UUID uuid) {
         double days = daysPlayed(uuid);
@@ -6172,7 +6485,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return entries;
     }
 
-    /** Opens the /leaderboards UI for the player. */
+    /**
+     * Opens the /leaderboards UI for the player.
+     */
     void openLeaderboards(Player player) {
         if (!player.hasPermission("planets.leaderboards")) {
             player.sendMessage(Component.text("You don't have permission to view the leaderboards.")
@@ -6234,7 +6549,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(" !").color(NamedTextColor.GRAY)));
     }
 
-    /** Resolves an online player, or one who has played here before, by name. */
+    /**
+     * Resolves an online player, or one who has played here before, by name.
+     */
     private OfflinePlayer findKnownPlayer(String query) {
         Player online = Bukkit.getPlayerExact(query);
         if (online != null) {
@@ -6251,15 +6568,21 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── SUS list (op only) ───────────────────────────────────────────────
 
-    /** One flagged player, stored in config.yml under "sus-players". */
+    /**
+     * One flagged player, stored in config.yml under "sus-players".
+     */
     record SusEntry(UUID uuid, String name, String addedBy, long addedAt) {
     }
 
-    /** Admins in a /sus spectate session, with what to restore on the way out. */
+    /**
+     * Admins in a /sus spectate session, with what to restore on the way out.
+     */
     private final Map<UUID, GameMode> spectateReturnMode = new HashMap<>();
     private final Map<UUID, Location> spectateReturnSpot = new HashMap<>();
 
-    /** Whether this sender may use the /sus tools (ops, or an explicit permission). */
+    /**
+     * Whether this sender may use the /sus tools (ops, or an explicit permission).
+     */
     boolean canUseSus(CommandSender sender) {
         return sender.isOp() || sender.hasPermission("planets.sus");
     }
@@ -6302,7 +6625,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return entries;
     }
 
-    /** Handles "/sus &lt;player&gt;", "/sus list"/"/sl", "/sus remove &lt;player&gt;" and "/sus stop". */
+    /**
+     * Handles "/sus &lt;player&gt;", "/sus list"/"/sl", "/sus remove &lt;player&gt;" and "/sus stop".
+     */
     private void handleSusCommand(CommandSender sender, String[] args) {
         if (!canUseSus(sender)) {
             sender.sendMessage(Component.text("Only operators can use /sus.").color(NamedTextColor.RED));
@@ -6361,7 +6686,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Flags a player. Returns whether they were newly added. */
+    /**
+     * Flags a player. Returns whether they were newly added.
+     */
     private boolean addSus(CommandSender sender, OfflinePlayer target) {
         UUID uuid = target.getUniqueId();
         String name = target.getName() != null ? target.getName() : uuid.toString().substring(0, 8);
@@ -6381,7 +6708,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return true;
     }
 
-    /** Removes a flagged player by name, so the list can't only ever grow. */
+    /**
+     * Removes a flagged player by name, so the list can't only ever grow.
+     */
     private void removeSus(CommandSender sender, String query) {
         for (SusEntry entry : susList()) {
             if (!entry.name().equalsIgnoreCase(query)) {
@@ -6397,7 +6726,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         sender.sendMessage(Component.text("'" + query + "' is not on the SUS list.").color(NamedTextColor.RED));
     }
 
-    /** Opens the /sus list UI for the admin. */
+    /**
+     * Opens the /sus list UI for the admin.
+     */
     void openSusMenu(Player player) {
         if (!canUseSus(player)) {
             player.sendMessage(Component.text("Only operators can open the SUS list.").color(NamedTextColor.RED));
@@ -6442,12 +6773,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         + ". Run /sus stop to leave spectator mode.").color(NamedTextColor.GRAY)));
     }
 
-    /** Whether this admin is in a /sus spectate session. */
+    /**
+     * Whether this admin is in a /sus spectate session.
+     */
     boolean isSpectating(Player admin) {
         return spectateReturnMode.containsKey(admin.getUniqueId());
     }
 
-    /** Leaves spectator mode: restores the admin's previous game mode and spot. */
+    /**
+     * Leaves spectator mode: restores the admin's previous game mode and spot.
+     */
     void stopSpectating(Player admin) {
         GameMode previous = spectateReturnMode.remove(admin.getUniqueId());
         Location spot = spectateReturnSpot.remove(admin.getUniqueId());
@@ -6468,7 +6803,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(".").color(NamedTextColor.GREEN)));
     }
 
-    /** Console-friendly view of the SUS list. */
+    /**
+     * Console-friendly view of the SUS list.
+     */
     private void sendSusListToChat(CommandSender sender) {
         List<SusEntry> entries = susList();
         if (entries.isEmpty()) {
@@ -6486,7 +6823,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Usage summary for the /sus command family. */
+    /**
+     * Usage summary for the /sus command family.
+     */
     private void sendSusUsage(CommandSender sender) {
         sender.sendMessage(Component.text("— SUS commands —").color(NamedTextColor.DARK_RED));
         sender.sendMessage(Component.text("/sus <player>").color(NamedTextColor.AQUA)
@@ -6501,7 +6840,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .color(NamedTextColor.DARK_GRAY));
     }
 
-    /** Hook into Vault's economy service at startup. */
+    /**
+     * Hook into Vault's economy service at startup.
+     */
     private void setupEconomy() {
         if (getServer().getPluginManager().getPlugin("Vault") == null) {
             getLogger().warning("Vault not found — economy features disabled.");
@@ -6519,7 +6860,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── /myp command ────────────────────────────────────────────────────
 
-    /** Returns the my-planet manager. */
+    /**
+     * Returns the my-planet manager.
+     */
     MyPlanetManager getMyPlanetManager() {
         return myPlanetManager;
     }
@@ -6529,7 +6872,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return myPlanetManager == null ? 0 : myPlanetManager.ownedCount(uuid);
     }
 
-    /** Returns every player's personal preferences (/settings). */
+    /**
+     * Returns every player's personal preferences (/settings).
+     */
     PlayerSettings getPlayerSettings() {
         return playerSettings;
     }
@@ -6565,13 +6910,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** The planet soundtrack (the "Planet Music" toggle in /settings). */
+    /**
+     * The planet soundtrack (the "Planet Music" toggle in /settings).
+     */
     PlanetMusic planetMusic() {
         return music;
     }
 
     /** The sidebar scoreboard shown on every player's screen. */
-    /** The registry of /settings pages contributed by other plugins. */
+    /**
+     * The registry of /settings pages contributed by other plugins.
+     */
     ExternalSettings externalSettings() {
         return externalSettings;
     }
@@ -6580,41 +6929,55 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return sidebar;
     }
 
-    /** Returns every player's saved homes (/home). */
+    /**
+     * Returns every player's saved homes (/home).
+     */
     HomeManager getHomeManager() {
         return homeManager;
     }
 
     // ── Friends & Social ────────────────────────────────────────────────
 
-    /** The friends system: friends, requests, presence, gifts and activity. */
+    /**
+     * The friends system: friends, requests, presence, gifts and activity.
+     */
     FriendSystem friendSystem() {
         return friendSystem;
     }
 
     // ── Personal music (/music) ─────────────────────────────────────────
 
-    /** Space travel: the star chart, the ship dock and the launch sequence. */
+    /**
+     * Space travel: the star chart, the ship dock and the launch sequence.
+     */
     SpaceTravel spaceTravel() {
         return spaceTravel;
     }
 
-    /** The space world: the ship and the landing pads planets get (/ship). */
+    /**
+     * The space world: the ship and the landing pads planets get (/ship).
+     */
     SpaceWorld spaceWorld() {
         return spaceWorld;
     }
 
-    /** The piloting sessions: who is flying their ship right now. */
+    /**
+     * The piloting sessions: who is flying their ship right now.
+     */
     ShipPilot shipPilot() {
         return shipPilot;
     }
 
-    /** The player's own on-demand songs and playlists. */
+    /**
+     * The player's own on-demand songs and playlists.
+     */
     PlayerMusic playerMusic() {
         return playerMusic;
     }
 
-    /** Whether a /music song or playlist is running for this player. */
+    /**
+     * Whether a /music song or playlist is running for this player.
+     */
     boolean personalMusicPlaying(Player player) {
         return playerMusic != null && playerMusic.isPlaying(player.getUniqueId());
     }
@@ -6789,7 +7152,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     .append(Component.text("/ship leave").color(NamedTextColor.AQUA))
                     .append(Component.text(" steps off.").color(NamedTextColor.GRAY)));
             return;
-        }        if (shipPilot != null && shipPilot.isPiloting(player)) {
+        }
+        if (shipPilot != null && shipPilot.isPiloting(player)) {
             player.sendMessage(Component.text("You're flying. ").color(NamedTextColor.GRAY)
                     .append(Component.text("Sneak in a planet's ring to dock").color(NamedTextColor.AQUA))
                     .append(Component.text(" or ").color(NamedTextColor.GRAY))
@@ -6842,8 +7206,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             boolean wasPlaying = playerMusic.stop(player);
             player.sendMessage(Component.text("\u23F9 Music stopped.").color(NamedTextColor.GRAY));
             player.sendMessage(Component.text(wasPlaying
-                    ? "The planet soundtrack stays quiet here until you move on or ask for music again."
-                    : "Nothing of yours was playing - music is already quiet here.")
+                            ? "The planet soundtrack stays quiet here until you move on or ask for music again."
+                            : "Nothing of yours was playing - music is already quiet here.")
                     .color(NamedTextColor.DARK_GRAY));
             return;
         }
@@ -6889,7 +7253,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         new MusicMenu(this, player).open(player);
     }
 
-    /** The short /music cheat-sheet, with the playlist shortcut spelled out. */
+    /**
+     * The short /music cheat-sheet, with the playlist shortcut spelled out.
+     */
     private void printMusicHelp(Player player) {
         player.sendMessage(Component.text("\uD83C\uDFB5 /music").color(NamedTextColor.GOLD)
                 .append(Component.text(" - browse every song this server has").color(NamedTextColor.GRAY)));
@@ -6941,7 +7307,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return true;
     }
 
-    /** Asks in chat for the new name of one of the player's playlists. */
+    /**
+     * Asks in chat for the new name of one of the player's playlists.
+     */
     void promptRenamePlaylist(Player player, String playlistName) {
         if (playerMusic == null) {
             return;
@@ -6964,7 +7332,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(" starts it from chat.").color(NamedTextColor.GRAY)));
     }
 
-    /** Applies the answer to a playlist rename prompt and reopens the playlist. */
+    /**
+     * Applies the answer to a playlist rename prompt and reopens the playlist.
+     */
     private void applyPlaylistRename(Player player, String playlistName, String input) {
         if (playerMusic == null) {
             return;
@@ -7006,13 +7376,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Reopens a playlist's editor after its chat prompt finished. */
+    /**
+     * Reopens a playlist's editor after its chat prompt finished.
+     */
     private void reopenPlaylistEditor(Player player, String playlistName) {
         player.closeInventory();
         new MusicPlaylistEditMenu(this, player, playlistName).open(player);
     }
 
-    /** Resolves a "/music play &lt;name&gt;" query to one of the server's music sounds. */
+    /**
+     * Resolves a "/music play &lt;name&gt;" query to one of the server's music sounds.
+     */
     private static Sound resolveMusicSound(String query) {
         String trimmed = query.trim();
         String key = trimmed.toUpperCase(Locale.ROOT).replace(' ', '_').replace('-', '_');
@@ -7025,12 +7399,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return direct != null && direct.name().startsWith("MUSIC") ? direct : null;
     }
 
-    /** The latest data-centre snapshot for a player, or null when there is none. */
+    /**
+     * The latest data-centre snapshot for a player, or null when there is none.
+     */
     PlayerData playerDataOf(UUID uuid) {
         return uuid == null || playerData == null ? null : playerData.get(uuid);
     }
 
-    /** Every player this server has data for whose name starts with a prefix. */
+    /**
+     * Every player this server has data for whose name starts with a prefix.
+     */
     List<PlayerData> searchPlayers(String prefix) {
         return playerData == null ? List.of() : playerData.search(prefix);
     }
@@ -7066,7 +7444,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return resolveDataUuid(query);
     }
 
-    /** Credits an offline player through Vault (used by friend gifts). */
+    /**
+     * Credits an offline player through Vault (used by friend gifts).
+     */
     boolean depositTo(OfflinePlayer player, double amount) {
         if (!hasEconomy() || player == null) {
             return false;
@@ -7159,7 +7539,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── /home, /sethome and /delhome ────────────────────────────────────
 
-    /** Handles the three home commands: /home, /sethome and /delhome. */
+    /**
+     * Handles the three home commands: /home, /sethome and /delhome.
+     */
     private void handleHomeCommand(Player player, String commandName, String[] args) {
         if (!player.hasPermission("planets.homes")) {
             player.sendMessage(Component.text("You don't have permission to use homes.")
@@ -7205,25 +7587,33 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Opens the light-blue /home menu showing every slot the player has. */
+    /**
+     * Opens the light-blue /home menu showing every slot the player has.
+     */
     void openHomesMenu(Player player) {
         player.closeInventory();
         new HomesMenu(this, player, homeManager).open(player);
     }
 
-    /** Opens the free bed-colour picker for every one of the player's homes. */
+    /**
+     * Opens the free bed-colour picker for every one of the player's homes.
+     */
     void openHomeColourMenu(Player player) {
         player.closeInventory();
         new HomeColourMenu(this, player, homeManager, null).open(player);
     }
 
-    /** Opens the free colour picker for a single home. */
+    /**
+     * Opens the free colour picker for a single home.
+     */
     void openHomeColourMenu(Player player, HomeManager.Home home) {
         player.closeInventory();
         new HomeColourMenu(this, player, homeManager, home).open(player);
     }
 
-    /** Asks in chat for the name to save the spot the player is standing on as. */
+    /**
+     * Asks in chat for the name to save the spot the player is standing on as.
+     */
     void promptNewHome(Player player, Location location) {
         pendingHomePrompts.put(player.getUniqueId(), HomePrompt.create(location));
         player.closeInventory();
@@ -7238,7 +7628,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(").").color(NamedTextColor.GRAY)));
     }
 
-    /** Asks in chat for a home's new name. */
+    /**
+     * Asks in chat for a home's new name.
+     */
     void promptRenameHome(Player player, String homeName) {
         HomeManager.Home home = homeManager.get(player.getUniqueId(), homeName);
         if (home == null) {
@@ -7253,7 +7645,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(" to keep it.").color(NamedTextColor.YELLOW)));
     }
 
-    /** Applies the answer to a /home chat prompt and reopens the menu. */
+    /**
+     * Applies the answer to a /home chat prompt and reopens the menu.
+     */
     private void applyHomePrompt(Player player, HomePrompt prompt, String input) {
         if (input.isEmpty() || input.equalsIgnoreCase("cancel")) {
             player.sendMessage(Component.text("\uD83C\uDFE0 Home prompt cancelled.")
@@ -7283,7 +7677,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         openHomesMenu(player);
     }
 
-    /** Saves a home, reporting whatever went wrong instead of failing silently. */
+    /**
+     * Saves a home, reporting whatever went wrong instead of failing silently.
+     */
     private void applyHomeCreate(Player player, String name, Location location, boolean reopenMenu) {
         switch (homeManager.set(player, name, location)) {
             case OK -> {
@@ -7312,7 +7708,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Removes one of the player's homes. */
+    /**
+     * Removes one of the player's homes.
+     */
     void deleteHome(Player player, String name) {
         if (homeManager.delete(player.getUniqueId(), name)) {
             player.sendMessage(Component.text("\uD83D\uDDD1 Home ").color(NamedTextColor.GREEN)
@@ -7394,7 +7792,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }, 20L, 20L);
     }
 
-    /** Cancels a home teleport that is still counting down, if there is one. */
+    /**
+     * Cancels a home teleport that is still counting down, if there is one.
+     */
     private boolean cancelPendingHomeTeleport(Player player, boolean notify) {
         PendingHomeTeleport pending = pendingHomeTeleports.remove(player.getUniqueId());
         if (pending == null) {
@@ -7410,7 +7810,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return true;
     }
 
-    /** The actual move to the home, once any countdown has finished. */
+    /**
+     * The actual move to the home, once any countdown has finished.
+     */
     private void performHomeTeleport(Player player, HomeManager.Home home, Location target) {
         player.closeInventory();
         player.teleport(target);
@@ -7424,7 +7826,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Admin homes panel ───────────────────────────────────────────────
 
-    /** Opens the admin Homes list: every player that has homes saved. */
+    /**
+     * Opens the admin Homes list: every player that has homes saved.
+     */
     void openAdminHomes(Player player) {
         if (!canUseAdmin(player)) {
             player.sendMessage(Component.text("You don't have permission to use the planet admin panel.")
@@ -7435,7 +7839,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         new AdminHomesMenu(this, player).open(player);
     }
 
-    /** Opens one player's homes with admin teleport/delete actions. */
+    /**
+     * Opens one player's homes with admin teleport/delete actions.
+     */
     void openAdminPlayerHomes(Player player, UUID ownerUuid) {
         if (!canUseAdmin(player)) {
             return;
@@ -7497,7 +7903,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return name == null || name.isBlank() ? null : offline.getUniqueId();
     }
 
-    /** The name of a homes owner, or a short uuid when it can't be resolved. */
+    /**
+     * The name of a homes owner, or a short uuid when it can't be resolved.
+     */
     String homesOwnerName(UUID uuid) {
         String name = Bukkit.getOfflinePlayer(uuid).getName();
         return name != null ? name : uuid.toString().substring(0, 8);
@@ -7528,7 +7936,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text("  (" + home.describe() + ")").color(NamedTextColor.GRAY)));
     }
 
-    /** Deletes one home of another player, reporting what happened. */
+    /**
+     * Deletes one home of another player, reporting what happened.
+     */
     void deletePlayerHome(Player admin, UUID ownerUuid, String homeName) {
         if (!homeManager.delete(ownerUuid, homeName)) {
             admin.sendMessage(Component.text("That home no longer exists.").color(NamedTextColor.RED));
@@ -7543,7 +7953,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 + "'s home '" + homeName + "'.");
     }
 
-    /** Deletes every home of one player at once. */
+    /**
+     * Deletes every home of one player at once.
+     */
     void deleteAllPlayerHomes(Player admin, UUID ownerUuid) {
         List<HomeManager.Home> saved = homeManager.homes(ownerUuid);
         int removed = 0;
@@ -7560,7 +7972,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 + homesOwnerName(ownerUuid) + ".");
     }
 
-    /** Prints the home commands in chat. */
+    /**
+     * Prints the home commands in chat.
+     */
     void printHomeHelp(Player player) {
         int used = homeManager.count(player.getUniqueId());
         int slots = homeManager.slots();
@@ -7576,7 +7990,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         + "s  ·  bed colour is free").color(NamedTextColor.AQUA)));
     }
 
-    /** A short "world x, y, z" line for chat messages. */
+    /**
+     * A short "world x, y, z" line for chat messages.
+     */
     private static String shortLocation(Location location) {
         if (location == null || location.getWorld() == null) {
             return "an unknown place";
@@ -7649,18 +8065,24 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return names;
     }
 
-    /** The action-bar line the Planet HUD shows, in the line the player picked. */
+    /**
+     * The action-bar line the Planet HUD shows, in the line the player picked.
+     */
     private Component hudBar(Player player) {
         return Component.text(renderHudTemplate(player, hudModeFor(player.getUniqueId()).template()))
                 .color(NamedTextColor.AQUA);
     }
 
-    /** Every HUD line configured under {@code hud.modes}. */
+    /**
+     * Every HUD line configured under {@code hud.modes}.
+     */
     List<HudMode> hudModes() {
         return hudModes;
     }
 
-    /** The HUD line a player is on, clamped to the configured list. */
+    /**
+     * The HUD line a player is on, clamped to the configured list.
+     */
     HudMode hudModeFor(UUID uuid) {
         List<HudMode> modes = hudModes.isEmpty() ? DEFAULT_HUD_MODES : hudModes;
         int index = playerSettings == null ? 0 : playerSettings.hudMode(uuid, modes.size());
@@ -7692,7 +8114,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── The planet designer (config.yml "planet-design") ─────────────────
 
-    /** Logs one problem with the planet designer's config. */
+    /**
+     * Logs one problem with the planet designer's config.
+     */
     private void warnAboutDesign(String message) {
         getLogger().warning("[planet-design] " + message);
     }
@@ -7880,12 +8304,16 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         createProfilePlanet(player, name, profile);
     }
 
-    /** Whether this player may design planets — the same gate as {@code /planets create}. */
+    /**
+     * Whether this player may design planets — the same gate as {@code /planets create}.
+     */
     boolean canDesign(Player player) {
         return player.hasPermission("planets.create") || player.hasPermission("planets.world");
     }
 
-    /** The planet designer's filters from config.yml, for the designer menu. */
+    /**
+     * The planet designer's filters from config.yml, for the designer menu.
+     */
     List<PlanetDesign.Filter> designFilters() {
         return designFilters;
     }
@@ -7917,7 +8345,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(".").color(NamedTextColor.LIGHT_PURPLE)));
     }
 
-    /** Opens the click-through planet designer for a world that does not exist yet. */
+    /**
+     * Opens the click-through planet designer for a world that does not exist yet.
+     */
     void openPlanetDesigner(Player player, String name) {
         if (!canDesign(player)) {
             player.sendMessage(Component.text("You don't have permission to design planets.")
@@ -8129,7 +8559,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return rendered;
     }
 
-    /** The HUD numbers other plugins publish, looked up once and kept. */
+    /**
+     * The HUD numbers other plugins publish, looked up once and kept.
+     */
     private volatile PlanetariumHudService hudService;
 
     /**
@@ -8158,7 +8590,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** A player's own statistic, or 0 when the server cannot read it. */
+    /**
+     * A player's own statistic, or 0 when the server cannot read it.
+     */
     private static int statistic(Player player, Statistic statistic) {
         try {
             return player.getStatistic(statistic);
@@ -8167,7 +8601,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** The NEB value behind the configured placeholder (0 when it can't be read). */
+    /**
+     * The NEB value behind the configured placeholder (0 when it can't be read).
+     */
     double nebValue(Player player) {
         if (nebPlaceholderIsUnset()) {
             return 0;
@@ -8177,7 +8613,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── In-game HUD editor (/planets hud) ───────────────────────────────
 
-    /** Opens the op-only editor for the HUD lines and their placeholders. */
+    /**
+     * Opens the op-only editor for the HUD lines and their placeholders.
+     */
     void openHudEditor(Player player) {
         if (!canUseAdmin(player)) {
             player.sendMessage(Component.text("You don't have permission to edit the Planet HUD.")
@@ -8188,14 +8626,18 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         new HudEditorMenu(this, player).open(player);
     }
 
-    /** The configured default HUD line, as a 0-based index into the list. */
+    /**
+     * The configured default HUD line, as a 0-based index into the list.
+     */
     int hudDefaultIndex() {
         List<HudMode> modes = hudModes.isEmpty() ? DEFAULT_HUD_MODES : hudModes;
         int oneBased = getConfig().getInt("hud.default-mode", 2);
         return Math.min(Math.max(oneBased - 1, 0), modes.size() - 1);
     }
 
-    /** Writes a whole list of HUD lines back to config.yml and the live list. */
+    /**
+     * Writes a whole list of HUD lines back to config.yml and the live list.
+     */
     void saveHudModes(List<HudMode> modes) {
         List<Map<String, Object>> raw = new ArrayList<>();
         for (HudMode mode : modes) {
@@ -8214,7 +8656,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         pushHudDefault();
     }
 
-    /** Deletes one configured HUD line. */
+    /**
+     * Deletes one configured HUD line.
+     */
     void removeHudMode(int index) {
         List<HudMode> modes = new ArrayList<>(hudModes);
         if (index < 0 || index >= modes.size()) {
@@ -8224,7 +8668,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         saveHudModes(modes);
     }
 
-    /** Marks one HUD line as the one new players start on. */
+    /**
+     * Marks one HUD line as the one new players start on.
+     */
     void setHudDefault(Player player, int index) {
         List<HudMode> modes = hudModes;
         if (index < 0 || index >= modes.size()) {
@@ -8240,7 +8686,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 + modes.get(index).label() + "'.");
     }
 
-    /** Re-reads the HUD lines from the config file (the editor's reload button). */
+    /**
+     * Re-reads the HUD lines from the config file (the editor's reload button).
+     */
     void reloadHudFromConfig(Player player) {
         reloadConfig();
         loadHudModes();
@@ -8250,13 +8698,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(").").color(NamedTextColor.AQUA)));
     }
 
-    /** Flashes a template to one player's action bar, so edits are visible live. */
+    /**
+     * Flashes a template to one player's action bar, so edits are visible live.
+     */
     void flashHudPreview(Player player, String template) {
         player.sendActionBar(Component.text(renderHudTemplate(player, template))
                 .color(NamedTextColor.AQUA));
     }
 
-    /** Asks in chat for the label of a HUD line (-1 = a brand-new line). */
+    /**
+     * Asks in chat for the label of a HUD line (-1 = a brand-new line).
+     */
     void promptHudLabel(Player player, int index) {
         pendingHudNames.put(player.getUniqueId(), index);
         player.closeInventory();
@@ -8268,7 +8720,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(" to abort.").color(NamedTextColor.YELLOW)));
     }
 
-    /** Applies an answer to the HUD label prompt and reopens the editor. */
+    /**
+     * Applies an answer to the HUD label prompt and reopens the editor.
+     */
     private void applyHudName(Player player, int index, String input) {
         if (input.isEmpty() || input.equalsIgnoreCase("cancel")) {
             player.sendMessage(Component.text("\uD83D\uDCF0 HUD editor prompt cancelled.")
@@ -8300,14 +8754,18 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         openHudEditor(player);
     }
 
-    /** Tells the per-player settings store which HUD line is the default. */
+    /**
+     * Tells the per-player settings store which HUD line is the default.
+     */
     private void pushHudDefault() {
         if (playerSettings != null) {
             playerSettings.defaultHudMode(hudDefaultIndex());
         }
     }
 
-    /** The VPL price of a planet's next Planet Size level, or "max" at the top. */
+    /**
+     * The VPL price of a planet's next Planet Size level, or "max" at the top.
+     */
     private static String nextSizeCost(MyPlanetData data) {
         int level = data.upgradeLevel(MyPlanetData.Upgrade.PLANET_SIZE);
         if (level >= MyPlanetData.PLANET_MAX_SIZE_LEVEL) {
@@ -8317,7 +8775,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return cost < 0 ? "max" : String.valueOf(Math.round(cost));
     }
 
-    /** A friendly label for a world: the planet's name, else the world's own. */
+    /**
+     * A friendly label for a world: the planet's name, else the world's own.
+     */
     String worldLabel(World world) {
         if (world == null) {
             return "Unknown";
@@ -8330,7 +8790,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return planet != null ? planet.name() : world.getName();
     }
 
-    /** A one-line summary of a planet's effects, shown when a player arrives. */
+    /**
+     * A one-line summary of a planet's effects, shown when a player arrives.
+     */
     private void sendEffectSummary(Player player) {
         if (playerSettings == null
                 || !playerSettings.get(player.getUniqueId(), PlayerSettings.Setting.EFFECT_SUMMARY)) {
@@ -8357,7 +8819,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(String.join(" \u00B7 ", parts)).color(NamedTextColor.AQUA)));
     }
 
-    /** SPEED -> "Speed", JUMP_BOOST -> "Jump Boost". */
+    /**
+     * SPEED -> "Speed", JUMP_BOOST -> "Jump Boost".
+     */
     private static String effectName(PotionEffectType type) {
         StringBuilder out = new StringBuilder();
         for (String word : type.getKey().getKey().split("_")) {
@@ -8372,7 +8836,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return out.toString();
     }
 
-    /** 1 -> I, 2 -> II, and so on for the effect levels in the summary line. */
+    /**
+     * 1 -> I, 2 -> II, and so on for the effect levels in the summary line.
+     */
     private static String roman(int value) {
         return switch (Math.min(Math.max(value, 1), 10)) {
             case 1 -> "I";
@@ -8402,7 +8868,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         player.sendMessage(line);
     }
 
-    /** The "Balance: X VPL" line shown after money moves, when it's switched on. */
+    /**
+     * The "Balance: X VPL" line shown after money moves, when it's switched on.
+     */
     void sendBalance(Player player) {
         if (!hasEconomy()) {
             return;
@@ -8414,7 +8882,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Personal settings, /msg, /r and teleport requests ───────────────
 
-    /** Whether the player has one of the plugin's own chat prompts open. */
+    /**
+     * Whether the player has one of the plugin's own chat prompts open.
+     */
     private boolean hasPendingPrompt(Player player) {
         UUID id = player.getUniqueId();
         return pendingRenames.containsKey(id) || pendingSells.containsKey(id)
@@ -8476,13 +8946,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** An online player by exact then case-insensitive name, or null. */
+    /**
+     * An online player by exact then case-insensitive name, or null.
+     */
     private static Player resolveOnlinePlayer(String name) {
         Player exact = Bukkit.getPlayerExact(name);
         return exact != null ? exact : Bukkit.getPlayer(name);
     }
 
-    /** /msg <player> <message> — a private message. */
+    /**
+     * /msg <player> <message> — a private message.
+     */
     private void handleMsgCommand(CommandSender sender, String[] args) {
         if (!(sender instanceof Player player)) {
             sender.sendMessage(Component.text("Only players can send private messages.").color(NamedTextColor.RED));
@@ -8520,7 +8994,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         replyTargets.put(player.getUniqueId(), target.getUniqueId());
     }
 
-    /** /r <message> — replies to the last private-message partner. */
+    /**
+     * /r <message> — replies to the last private-message partner.
+     */
     private void handleReplyCommand(CommandSender sender, String[] args) {
         if (!(sender instanceof Player player)) {
             sender.sendMessage(Component.text("Only players can send private messages.").color(NamedTextColor.RED));
@@ -8542,7 +9018,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         replyTargets.put(target.getUniqueId(), player.getUniqueId());
     }
 
-    /** Sends a private message to both ends, pinging the receiver if they want it. */
+    /**
+     * Sends a private message to both ends, pinging the receiver if they want it.
+     */
     private void deliverMessage(Player from, Player to, String message) {
         from.sendMessage(Component.text("→ " + to.getName() + ": ").color(NamedTextColor.GRAY)
                 .append(Component.text(message).color(NamedTextColor.WHITE)));
@@ -8553,7 +9031,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** /tpa <player> (here=false) or /tpahere <player> (here=true). */
+    /**
+     * /tpa <player> (here=false) or /tpahere <player> (here=true).
+     */
     private void handleTpaCommand(CommandSender sender, String[] args, boolean here) {
         if (!(sender instanceof Player player)) {
             sender.sendMessage(Component.text("Only players can send teleport requests.").color(NamedTextColor.RED));
@@ -8621,7 +9101,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return true;
     }
 
-    /** /tpaccept [player] — performs the pending teleport. */
+    /**
+     * /tpaccept [player] — performs the pending teleport.
+     */
     private void handleTpaAccept(CommandSender sender, String[] args) {
         if (!(sender instanceof Player player)) {
             sender.sendMessage(Component.text("Only players can accept teleport requests.").color(NamedTextColor.RED));
@@ -8653,7 +9135,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         getLogger().info(player.getName() + " accepted " + from.getName() + "'s teleport request.");
     }
 
-    /** /tpdeny [player] — refuses the pending teleport. */
+    /**
+     * /tpdeny [player] — refuses the pending teleport.
+     */
     private void handleTpaDeny(CommandSender sender, String[] args) {
         if (!(sender instanceof Player player)) {
             sender.sendMessage(Component.text("Only players can deny teleport requests.").color(NamedTextColor.RED));
@@ -8671,7 +9155,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Removes and returns the still-valid request waiting for this player. */
+    /**
+     * Removes and returns the still-valid request waiting for this player.
+     */
     private TpaRequest takeTpaRequest(Player player, String[] args) {
         TpaRequest request = tpaRequests.remove(player.getUniqueId());
         if (request == null) {
@@ -8719,7 +9205,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(" to abort.").color(NamedTextColor.YELLOW)));
         if (price > 0) {
             player.sendMessage(Component.text("This will be rename #" + editNumber + " and costs ")
-                            .color(NamedTextColor.YELLOW)
+                    .color(NamedTextColor.YELLOW)
                     .append(Component.text(formatPrice(price) + " VPL").color(NamedTextColor.GOLD))
                     .append(Component.text(" — charged when you confirm.").color(NamedTextColor.GRAY)));
         } else {
@@ -8727,7 +9213,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Applies a rename answered in chat for the /myp rename prompt. */
+    /**
+     * Applies a rename answered in chat for the /myp rename prompt.
+     */
     private void applyRename(Player player, String worldName, String newName) {
         MyPlanetData data = myPlanetManager.get(worldName);
         if (data == null) {
@@ -8803,7 +9291,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return prices.get(Math.min(idx, prices.size() - 1));
     }
 
-    /** Applies a planet-delete confirmation answered in chat. */
+    /**
+     * Applies a planet-delete confirmation answered in chat.
+     */
     private void applyDelete(Player player, String worldName, String input) {
         input = input.trim();
         if (input.isEmpty() || input.equalsIgnoreCase("cancel")) {
@@ -8825,7 +9315,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         deletePlanetNow(player, worldName);
     }
 
-    /** Applies a sell price answered in chat for the /myp sell prompt. */
+    /**
+     * Applies a sell price answered in chat for the /myp sell prompt.
+     */
     private void applySellPrice(Player player, String worldName, String priceInput) {
         MyPlanetData data = myPlanetManager.get(worldName);
         if (data == null) {
@@ -8945,7 +9437,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return offline;
     }
 
-    /** A display name for an offline player, falling back to a short uuid. */
+    /**
+     * A display name for an offline player, falling back to a short uuid.
+     */
     static String targetName(OfflinePlayer target) {
         String name = target.getName();
         return name != null ? name : target.getUniqueId().toString().substring(0, 8);
@@ -9001,13 +9495,15 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             notifyInvite(online, data, inviter.getName());
         } else {
             inviter.sendMessage(Component.text(targetName + " is offline — the invitation will be waiting "
-                            + "for them the next time they log in.").color(NamedTextColor.GRAY));
+                    + "for them the next time they log in.").color(NamedTextColor.GRAY));
         }
         getLogger().info(inviter.getName() + " invited " + targetName + " to '" + data.worldName() + "'.");
         return true;
     }
 
-    /** Sends one invitation with clickable accept / deny buttons. */
+    /**
+     * Sends one invitation with clickable accept / deny buttons.
+     */
     void notifyInvite(Player target, MyPlanetData data, String inviterName) {
         if (!playerSettings.get(target.getUniqueId(), PlayerSettings.Setting.INVITE_NOTIFICATIONS)) {
             return; // the invitation is still stored and listed in /myp → Invitations
@@ -9030,7 +9526,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(" to decline.").color(NamedTextColor.GRAY)));
     }
 
-    /** Reminds a player, when they join, about every invitation still waiting. */
+    /**
+     * Reminds a player, when they join, about every invitation still waiting.
+     */
     void sendPendingInvites(Player player) {
         if (!playerSettings.get(player.getUniqueId(), PlayerSettings.Setting.INVITE_NOTIFICATIONS)) {
             return;
@@ -9045,7 +9543,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             return;
         }
         player.sendMessage(Component.text("✉ You have " + pending.size()
-                        + " pending planet invitation(s):").color(NamedTextColor.GOLD));
+                + " pending planet invitation(s):").color(NamedTextColor.GOLD));
         for (MyPlanetData data : pending) {
             notifyInvite(player, data, null);
         }
@@ -9420,7 +9918,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** Suggests both world names and display names for a player's owned planets. */
+    /**
+     * Suggests both world names and display names for a player's owned planets.
+     */
     private List<String> ownedPlanetSuggestions(Player player, String prefix) {
         return myPlanetManager.ownedBy(player.getUniqueId()).stream()
                 .flatMap(data -> {
@@ -9436,7 +9936,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .toList();
     }
 
-    /** Tab completion for /myp sub-commands (invite, uninvite player names). */
+    /**
+     * Tab completion for /myp sub-commands (invite, uninvite player names).
+     */
     private List<String> mypTabComplete(Player player, String[] args) {
         String prefix = args[args.length - 1].toLowerCase(Locale.ROOT);
         if (args.length == 1) {
@@ -9480,7 +9982,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return List.of();
     }
 
-    /** Online player names matching a prefix, for tab completion. */
+    /**
+     * Online player names matching a prefix, for tab completion.
+     */
     private static List<String> onlineNames(String prefix) {
         return Bukkit.getOnlinePlayers().stream()
                 .map(Player::getName)
@@ -9488,7 +9992,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .toList();
     }
 
-    /** Opens the main My Planet control panel for a specific planet. */
+    /**
+     * Opens the main My Planet control panel for a specific planet.
+     */
     void openMyPlanetMenu(Player player, MyPlanetData data) {
         player.closeInventory();
         new MyPlanetMenu(this, player, data).open(player);
@@ -9648,14 +10154,18 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** The server's main world name, or an empty string. */
+    /**
+     * The server's main world name, or an empty string.
+     */
     private String mainWorldName() {
         return Bukkit.getWorlds().isEmpty() ? "" : Bukkit.getWorlds().get(0).getName();
     }
 
     // ── Recorded borders (survive restarts and /planets reload) ──────────
 
-    /** The border size last set for a world, or null when none was recorded. */
+    /**
+     * The border size last set for a world, or null when none was recorded.
+     */
     Double recordedBorder(String worldName) {
         String path = "planet-borders." + worldName.toLowerCase(Locale.ROOT);
         return getConfig().contains(path) ? getConfig().getDouble(path) : null;
@@ -9678,10 +10188,14 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      *
      * @return how many worlds were changed
      */
-    /** Worlds the last {@link #setPublicPlanetBorders} call deliberately skipped. */
+    /**
+     * Worlds the last {@link #setPublicPlanetBorders} call deliberately skipped.
+     */
     private final List<String> lastBorderSkips = new ArrayList<>();
 
-    /** The protected worlds skipped by the last bulk border change. */
+    /**
+     * The protected worlds skipped by the last bulk border change.
+     */
     List<String> lastBorderSkips() {
         return List.copyOf(lastBorderSkips);
     }
@@ -9730,10 +10244,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 sender.sendMessage(Component.text(" \u2022 ").color(NamedTextColor.DARK_GRAY)
                         .append(Component.text(planet.worldName()).color(NamedTextColor.YELLOW))
                         .append(Component.text(world == null ? "  (not loaded)" : "  now: "
-                                + (long) world.getWorldBorder().getSize() + " blocks")
+                                        + (long) world.getWorldBorder().getSize() + " blocks")
                                 .color(NamedTextColor.GRAY))
                         .append(Component.text(recorded == null ? "  recorded: none"
-                                : "  recorded: " + (long) (double) recorded + " blocks")
+                                        : "  recorded: " + (long) (double) recorded + " blocks")
                                 .color(recorded == null ? NamedTextColor.DARK_GRAY : NamedTextColor.AQUA)));
             }
             sender.sendMessage(Component.text("Usage: ").color(NamedTextColor.GRAY)
@@ -9791,7 +10305,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Reads a border size as blocks ("96") or chunks ("6x6"), or -1 when invalid. */
+    /**
+     * Reads a border size as blocks ("96") or chunks ("6x6"), or -1 when invalid.
+     */
     static double parseBorderSize(String input) {
         if (input == null || input.isBlank()) {
             return -1;
@@ -9840,7 +10356,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return changed;
     }
 
-    /** The custom menu icon for a world from config.yml, or null for the default. */
+    /**
+     * The custom menu icon for a world from config.yml, or null for the default.
+     */
     Material iconOverride(String worldName) {
         String materialName = getConfig().getString("icons." + worldName);
         Material material = materialName == null ? null : Material.matchMaterial(materialName);
@@ -9919,7 +10437,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         teleportToSpawn(player, main, main.getName());
     }
 
-    /** Loads a world for the post-abandon evacuation when it isn't loaded yet. */
+    /**
+     * Loads a world for the post-abandon evacuation when it isn't loaded yet.
+     */
     private World loadPlanetWorld(String worldName) {
         World world = Bukkit.getWorld(worldName);
         if (world != null) {
@@ -9933,7 +10453,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Instantly teleports a player to a world's spawn with a short notice. */
+    /**
+     * Instantly teleports a player to a world's spawn with a short notice.
+     */
     private void teleportToSpawn(Player player, World world, String planetName) {
         player.teleport(world.getSpawnLocation());
         player.sendMessage(Component.text("You were moved to ").color(NamedTextColor.YELLOW)
@@ -9979,7 +10501,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
      * Opens the My Planets overview menu, listing every planet the player
      * owns or is a member of. Run by /myp with no arguments.
      */
-    /** Sets a pending sell prompt for the player. */
+    /**
+     * Sets a pending sell prompt for the player.
+     */
     void setPendingSell(Player player, String worldName) {
         pendingSells.put(player.getUniqueId(), worldName.toLowerCase(Locale.ROOT));
     }
@@ -10008,7 +10532,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return String.format(Locale.ROOT, "%.2f", value);
     }
 
-    /** Formats a playtime in hours for menus: 0.5 -> "0.5 hours", 1 -> "1 hour". */
+    /**
+     * Formats a playtime in hours for menus: 0.5 -> "0.5 hours", 1 -> "1 hour".
+     */
     public static String formatHours(double hours) {
         if (hours <= 0) {
             return "0 hours";
@@ -10057,7 +10583,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return amount + (amount.equals("1") ? " day" : " days");
     }
 
-    /** Formats a timestamp (ms since epoch) as a human-readable date. */
+    /**
+     * Formats a timestamp (ms since epoch) as a human-readable date.
+     */
     public static String formatDate(long ms) {
         if (ms <= 0) {
             return "never";
@@ -10067,7 +10595,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return fmt.format(new Date(ms));
     }
 
-    /** Trims a scaled price: 1.0 -> "1", 1.5 -> "1.5", 1.25 -> "1.25". */
+    /**
+     * Trims a scaled price: 1.0 -> "1", 1.5 -> "1.5", 1.25 -> "1.25".
+     */
     private static String trimPrice(double value) {
         if (value == Math.floor(value)) {
             return String.valueOf((long) value);
@@ -10146,7 +10676,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             saveConfigQuietly();
             player.sendMessage(Component.text("Rename prices reset to default: ").color(NamedTextColor.GREEN)
                     .append(Component.text(DEFAULT_RENAME_PRICES.stream()
-                            .map(p -> formatPrice(p)).collect(Collectors.joining(", ")))
+                                    .map(p -> formatPrice(p)).collect(Collectors.joining(", ")))
                             .color(NamedTextColor.YELLOW))
                     .append(Component.text(".").color(NamedTextColor.GREEN)));
             return;
@@ -10178,7 +10708,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         saveConfigQuietly();
         player.sendMessage(Component.text("Rename prices updated: ").color(NamedTextColor.GREEN)
                 .append(Component.text(newPrices.stream()
-                        .map(p -> formatPrice(p)).collect(Collectors.joining(", ")))
+                                .map(p -> formatPrice(p)).collect(Collectors.joining(", ")))
                         .color(NamedTextColor.YELLOW))
                 .append(Component.text(".").color(NamedTextColor.GREEN)));
         player.sendMessage(Component.text("Rename #1 is still free. The last price is reused for every later rename.").color(NamedTextColor.GRAY));
@@ -10192,18 +10722,24 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Admin control panel (/planets admin) ─────────────────────────────
 
-    /** One planet as shown in the admin panel, with everything a row needs. */
+    /**
+     * One planet as shown in the admin panel, with everything a row needs.
+     */
     record AdminPlanet(String worldName, String displayName, MyPlanetData owned,
                        boolean locked, boolean protectedWorld, String landingMode,
                        boolean structures, PlanetTerrain.Spec terrain) {
 
-        /** Whether a player owns it (as opposed to a public /p planet). */
+        /**
+         * Whether a player owns it (as opposed to a public /p planet).
+         */
         boolean isOwned() {
             return owned != null;
         }
     }
 
-    /** One generation choice in the admin terrain picker. */
+    /**
+     * One generation choice in the admin terrain picker.
+     */
     record Generation(String id, String displayName, String description,
                       Material icon, PlanetTerrain.Spec spec) {
     }
@@ -10217,7 +10753,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return player.isOp() || player.hasPermission("planets.admin");
     }
 
-    /** The owner's name, or a short uuid when their account can't be resolved. */
+    /**
+     * The owner's name, or a short uuid when their account can't be resolved.
+     */
     String adminOwnerName(MyPlanetData data) {
         if (data == null || data.ownerUuid() == null) {
             return "nobody";
@@ -10226,7 +10764,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return name != null ? name : data.ownerUuid().toString().substring(0, 8);
     }
 
-    /** How players land on a world (mirrors what PlanetTravel actually uses). */
+    /**
+     * How players land on a world (mirrors what PlanetTravel actually uses).
+     */
     String landingModeOf(String worldName) {
         String mode = getConfig().getString("landing-modes." + worldName);
         if (mode != null && !mode.isBlank()) {
@@ -10242,13 +10782,17 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return "random";
     }
 
-    /** The name to show for a world in the admin panel. */
+    /**
+     * The name to show for a world in the admin panel.
+     */
     private String adminDisplayName(String worldName) {
         MyPlanetData data = myPlanetManager.get(worldName);
         return data != null ? data.displayName() : worldName;
     }
 
-    /** Every planet an admin can act on: player-owned ones first, then public. */
+    /**
+     * Every planet an admin can act on: player-owned ones first, then public.
+     */
     List<AdminPlanet> adminPlanets() {
         String middleEarth = getConfig().getString("middle-earth-world", "Middle_earth");
         String mainWorld = Bukkit.getWorlds().isEmpty() ? "" : Bukkit.getWorlds().get(0).getName();
@@ -10289,7 +10833,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return planets;
     }
 
-    /** The admin-panel entry of one world, or null when it isn't a planet. */
+    /**
+     * The admin-panel entry of one world, or null when it isn't a planet.
+     */
     AdminPlanet adminPlanet(String worldName) {
         if (worldName == null) {
             return null;
@@ -10302,7 +10848,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return null;
     }
 
-    /** Worlds that must never be deleted or regenerated (the hub/Middle Earth). */
+    /**
+     * Worlds that must never be deleted or regenerated (the hub/Middle Earth).
+     */
     private boolean isProtectedWorldName(String worldName, String middleEarth, String mainWorld) {
         return worldName.equalsIgnoreCase(middleEarth) || worldName.equalsIgnoreCase(mainWorld);
     }
@@ -10311,7 +10859,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return lockedWorlds().contains(worldName.toLowerCase(Locale.ROOT));
     }
 
-    /** Opens the admin panel: the server-wide dashboard, which links to the planet list. */
+    /**
+     * Opens the admin panel: the server-wide dashboard, which links to the planet list.
+     */
     void openAdminMenu(Player player) {
         if (!canUseAdmin(player)) {
             player.sendMessage(Component.text("You don't have permission to use the planet admin panel.")
@@ -10321,17 +10871,23 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         openAdminDashboard(player);
     }
 
-    /** Opens the full admin help page (also "/planets admin help"). */
+    /**
+     * Opens the full admin help page (also "/planets admin help").
+     */
     void openAdminHelp(Player player) {
         openAdminHelp(player, null);
     }
 
-    /** Opens the admin help page, optionally filtered by a search keyword. */
+    /**
+     * Opens the admin help page, optionally filtered by a search keyword.
+     */
     void openAdminHelp(Player player, String query) {
         openHelp(player, query, true);
     }
 
-    /** Opens the help page every player gets (staff actions included for staff). */
+    /**
+     * Opens the help page every player gets (staff actions included for staff).
+     */
     void openHelp(Player player) {
         openHelp(player, null, false);
     }
@@ -10374,7 +10930,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return entries;
     }
 
-    /** Permissions an ordinary player is expected to have. */
+    /**
+     * Permissions an ordinary player is expected to have.
+     */
     private static final Set<String> PLAYER_PERMISSIONS = Set.of(
             "planets.use", "planets.homes", "planets.settings", "planets.bal",
             "planets.leaderboards", "planets.buy");
@@ -10527,11 +11085,15 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Help search input ────────────────────────────────────────────────
 
-    /** A virtual sign the player is typing their search keyword into. */
+    /**
+     * A virtual sign the player is typing their search keyword into.
+     */
     private record HelpSign(String world, int x, int y, int z, boolean adminView) {
     }
 
-    /** Players currently typing a search keyword into a virtual sign. */
+    /**
+     * Players currently typing a search keyword into a virtual sign.
+     */
     private final Map<UUID, HelpSign> helpSigns = new HashMap<>();
 
     /**
@@ -10637,7 +11199,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         showHelpSearch(player, query, expected.adminView());
     }
 
-    /** Reopens the help page filtered by the keyword, telling the player how it went. */
+    /**
+     * Reopens the help page filtered by the keyword, telling the player how it went.
+     */
     void showHelpSearch(Player player, String query, boolean adminView) {
         if (adminView && !canUseAdmin(player)) {
             return;
@@ -10842,7 +11406,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             Map.entry("retired", "deleted abandoned can never be bought")
     );
 
-    /** One help entry, with the category it belongs to and its search aliases. */
+    /**
+     * One help entry, with the category it belongs to and its search aliases.
+     */
     private static void help(List<AdminHelpMenu.Entry> entries, String category, Material icon,
                              String usage, String description, String permission) {
         String text = (usage + " " + description + " " + category).toLowerCase(Locale.ROOT);
@@ -10856,7 +11422,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 keywords.toString()));
     }
 
-    /** Opens the server-wide overview (counts, world health, cleanup). */
+    /**
+     * Opens the server-wide overview (counts, world health, cleanup).
+     */
     void openAdminDashboard(Player player) {
         if (!canUseAdmin(player)) {
             return;
@@ -10865,7 +11433,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         new AdminOverviewMenu(this, player, serverStats()).open(player);
     }
 
-    /** Opens the list of every planet, from the dashboard or a planet's back button. */
+    /**
+     * Opens the list of every planet, from the dashboard or a planet's back button.
+     */
     void openAdminPlanetList(Player player) {
         if (!canUseAdmin(player)) {
             return;
@@ -10881,18 +11451,24 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Server-wide health: counts and cleanup ───────────────────────────
 
-    /** A snapshot of the whole server's planet health, for the admin dashboard. */
+    /**
+     * A snapshot of the whole server's planet health, for the admin dashboard.
+     */
     record ServerStats(int owned, int publicPlanets, int loadedWorlds, int unloadedWorlds,
                        int locked, int retired, int previews, int totalBlocks,
                        String topPlanet, int topBlocks, List<String> leftovers,
                        List<String> emptyWorlds) {
 
-        /** Planets an admin can open (owned + public). */
+        /**
+         * Planets an admin can open (owned + public).
+         */
         int planets() {
             return owned + publicPlanets;
         }
 
-        /** How many worlds the cleanup would remove. */
+        /**
+         * How many worlds the cleanup would remove.
+         */
         int cleanable() {
             return leftovers.size() + previews;
         }
@@ -10943,7 +11519,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 totalBlocks, topPlanet, topBlocks, leftovers, empty);
     }
 
-    /** Preview worlds that actually still exist (loaded or on disk). */
+    /**
+     * Preview worlds that actually still exist (loaded or on disk).
+     */
     List<String> livePreviewWorlds() {
         List<String> live = new ArrayList<>();
         for (String name : previewWorldNames()) {
@@ -11042,7 +11620,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return removed;
     }
 
-    /** Opens the per-planet action panel (re-renders in place when already open). */
+    /**
+     * Opens the per-planet action panel (re-renders in place when already open).
+     */
     void openAdminPlanet(Player player, String worldName) {
         if (!canUseAdmin(player)) {
             return;
@@ -11060,7 +11640,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Opens the generation picker for one planet or lobby world. */
+    /**
+     * Opens the generation picker for one planet or lobby world.
+     */
     void openAdminTerrainPicker(Player player, String worldName) {
         if (!canUseAdmin(player)) {
             return;
@@ -11074,19 +11656,25 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Admin control panel: lobbies ─────────────────────────────────────
 
-    /** Every configured lobby, sorted by name, for the admin lobby list. */
+    /**
+     * Every configured lobby, sorted by name, for the admin lobby list.
+     */
     List<Lobby> adminLobbies() {
         List<Lobby> lobbies = new ArrayList<>(availableLobbies());
         lobbies.sort((a, b) -> a.name().compareToIgnoreCase(b.name()));
         return lobbies;
     }
 
-    /** A lobby by id, display name or world name, or null. */
+    /**
+     * A lobby by id, display name or world name, or null.
+     */
     Lobby adminLobby(String query) {
         return findLobby(query);
     }
 
-    /** Opens the casino admin panel (Dashboard → Casino, or /casino admin). */
+    /**
+     * Opens the casino admin panel (Dashboard → Casino, or /casino admin).
+     */
     public void openAdminCasino(Player player) {
         if (casino == null || !canUseAdmin(player)) {
             return;
@@ -11095,7 +11683,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         casino.openAdmin(player);
     }
 
-    /** Opens the admin lobby list (Dashboard → Lobby Admin, or a planet panel). */
+    /**
+     * Opens the admin lobby list (Dashboard → Lobby Admin, or a planet panel).
+     */
     void openAdminLobbies(Player player) {
         if (!canUseAdmin(player)) {
             return;
@@ -11113,7 +11703,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         new AdminLobbiesMenu(this, player, lobbies).open(player);
     }
 
-    /** Opens one lobby's admin panel. */
+    /**
+     * Opens one lobby's admin panel.
+     */
     void openAdminLobby(Player player, String lobbyId) {
         if (!canUseAdmin(player)) {
             return;
@@ -11129,7 +11721,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         new AdminLobbyPanelMenu(this, player, lobby.id()).open(player);
     }
 
-    /** Sends an admin to a lobby (loading its world first when needed). */
+    /**
+     * Sends an admin to a lobby (loading its world first when needed).
+     */
     void enterLobbyWorld(Player actor, Lobby lobby) {
         World world = loadWorldNow(lobby.worldName());
         if (world == null) {
@@ -11147,7 +11741,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(" at its landing spot.").color(NamedTextColor.GRAY)));
     }
 
-    /** Cycles a lobby's menu icon through the admin palette. */
+    /**
+     * Cycles a lobby's menu icon through the admin palette.
+     */
     void cycleLobbyIcon(Player actor, Lobby lobby) {
         int index = ICON_PALETTE.indexOf(lobby.icon());
         Material next = ICON_PALETTE.get((index + 1) % ICON_PALETTE.size());
@@ -11161,7 +11757,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         .color(NamedTextColor.GREEN)));
     }
 
-    /** Pins the admin's current position as a lobby's landing spot. */
+    /**
+     * Pins the admin's current position as a lobby's landing spot.
+     */
     void setLobbyLandingHere(Player actor, Lobby lobby) {
         Location location = actor.getLocation();
         String path = "lobbies." + lobby.id();
@@ -11176,12 +11774,14 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(lobby.name()).color(NamedTextColor.YELLOW))
                 .append(Component.text(" pinned at (").color(NamedTextColor.GREEN))
                 .append(Component.text(location.getBlockX() + ", " + location.getBlockY() + ", "
-                                + location.getBlockZ()).color(NamedTextColor.YELLOW))
+                        + location.getBlockZ()).color(NamedTextColor.YELLOW))
                 .append(Component.text(") in " + location.getWorld().getName() + ".")
                         .color(NamedTextColor.GREEN)));
     }
 
-    /** Clears a lobby's pinned landing spot (players then land at the world spawn). */
+    /**
+     * Clears a lobby's pinned landing spot (players then land at the world spawn).
+     */
     void clearLobbyLanding(Player actor, Lobby lobby) {
         String path = "lobbies." + lobby.id();
         getConfig().set(path + ".x", null);
@@ -11218,7 +11818,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Lobby editor (/lobby editor) ─────────────────────────────────────
 
-    /** Handles "/lobby editor [lobby]": opens the lobby's admin panel. */
+    /**
+     * Handles "/lobby editor [lobby]": opens the lobby's admin panel.
+     */
     private void lobbyEditor(Player player, String[] args) {
         if (!canUseAdmin(player)) {
             player.sendMessage(Component.text("You don't have permission to edit lobbies.")
@@ -11240,7 +11842,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         openAdminLobby(player, lobby.id());
     }
 
-    /** Handles "/lobby rename <lobby> <new name>". */
+    /**
+     * Handles "/lobby rename <lobby> <new name>".
+     */
     private void lobbyRename(Player player, String[] args) {
         if (args.length < 3) {
             player.sendMessage(Component.text("Usage: /lobby rename <lobby> <new name>")
@@ -11257,7 +11861,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         renameLobby(player, lobby, String.join(" ", Arrays.copyOfRange(args, 2, args.length)));
     }
 
-    /** Handles "/lobby slot <lobby> <0-25>". */
+    /**
+     * Handles "/lobby slot <lobby> <0-25>".
+     */
     private void lobbySlot(Player player, String[] args) {
         if (args.length < 3) {
             player.sendMessage(Component.text("Usage: /lobby slot <lobby> <0-25>")
@@ -11279,7 +11885,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Handles "/lobby desc <lobby> <text|none>". */
+    /**
+     * Handles "/lobby desc <lobby> <text|none>".
+     */
     private void lobbyDescription(Player player, String[] args) {
         if (args.length < 3) {
             player.sendMessage(Component.text("Usage: /lobby desc <lobby> <text|none>")
@@ -11390,13 +11998,15 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             actor.sendMessage(Component.text("Note: ").color(NamedTextColor.YELLOW)
                     .append(Component.text(taken.name()).color(NamedTextColor.GOLD))
                     .append(Component.text(" was already in that slot — it will be shown in the first "
-                            + "free slot instead. Give it another slot to fix that.")
+                                    + "free slot instead. Give it another slot to fix that.")
                             .color(NamedTextColor.YELLOW)));
         }
         return true;
     }
 
-    /** The other lobby occupying a menu slot, or null when the slot is free. */
+    /**
+     * The other lobby occupying a menu slot, or null when the slot is free.
+     */
     Lobby lobbyInSlot(int slot, String exceptId) {
         for (Lobby lobby : availableLobbies()) {
             if (!lobby.id().equalsIgnoreCase(exceptId) && lobby.slot() != null && lobby.slot() == slot) {
@@ -11408,7 +12018,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
 
     // ── Chat prompts for the editor ─────────────────────────────────────
 
-    /** Asks, in chat, for a lobby's new display name. */
+    /**
+     * Asks, in chat, for a lobby's new display name.
+     */
     void promptLobbyName(Player actor, Lobby lobby) {
         pendingLobbyEdits.put(actor.getUniqueId(), new PendingLobbyEdit(lobby.id(), LobbyEditKind.NAME));
         actor.closeInventory();
@@ -11419,7 +12031,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(".").color(NamedTextColor.GOLD)));
     }
 
-    /** Asks, in chat, for a lobby's description. */
+    /**
+     * Asks, in chat, for a lobby's description.
+     */
     void promptLobbyDescription(Player actor, Lobby lobby) {
         pendingLobbyEdits.put(actor.getUniqueId(), new PendingLobbyEdit(lobby.id(), LobbyEditKind.DESCRIPTION));
         actor.closeInventory();
@@ -11436,7 +12050,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         .color(NamedTextColor.YELLOW)));
     }
 
-    /** Asks, in chat, which menu slot a lobby should sit in. */
+    /**
+     * Asks, in chat, which menu slot a lobby should sit in.
+     */
     void promptLobbySlot(Player actor, Lobby lobby) {
         pendingLobbyEdits.put(actor.getUniqueId(), new PendingLobbyEdit(lobby.id(), LobbyEditKind.SLOT));
         actor.closeInventory();
@@ -11451,7 +12067,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         .color(NamedTextColor.YELLOW)));
     }
 
-    /** Applies whatever the player answered to a lobby edit prompt. */
+    /**
+     * Applies whatever the player answered to a lobby edit prompt.
+     */
     private void applyLobbyEdit(Player player, PendingLobbyEdit edit, String input) {
         Lobby lobby = findLobby(edit.lobbyId());
         if (lobby == null) {
@@ -11482,18 +12100,24 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         openAdminLobby(player, lobby.id());
     }
 
-    /** Alias used by the admin menus: whether structures may generate in a world. */
+    /**
+     * Alias used by the admin menus: whether structures may generate in a world.
+     */
     boolean worldStructures(String worldName) {
         return structuresEnabled(worldName);
     }
 
-    /** Friendly name of a world's locked weather, for the admin panels. */
+    /**
+     * Friendly name of a world's locked weather, for the admin panels.
+     */
     String weatherLockName(String worldName) {
         String locked = getConfig().getString("weather-lock." + worldName);
         return locked == null || locked.isBlank() ? "unlocked (normal weather)" : locked;
     }
 
-    /** Every generation the server can build, as picker entries. */
+    /**
+     * Every generation the server can build, as picker entries.
+     */
     List<Generation> generations() {
         List<Generation> list = new ArrayList<>();
         for (PlanetArchetypes.Archetype archetype : PlanetArchetypes.all()) {
@@ -11604,7 +12228,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return true;
     }
 
-    /** Locks or unlocks a planet, exactly like "/planets lock", without the countdown. */
+    /**
+     * Locks or unlocks a planet, exactly like "/planets lock", without the countdown.
+     */
     void setPlanetLock(Player actor, String worldName, boolean locked) {
         Planet planet = new Planet(adminDisplayName(worldName), Material.GRASS_BLOCK, worldName);
         if (locked) {
@@ -11627,7 +12253,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         getLogger().info(actor.getName() + " unlocked planet '" + worldName + "'.");
     }
 
-    /** Cycles a planet's landing mode: station → random → point → station. */
+    /**
+     * Cycles a planet's landing mode: station → random → point → station.
+     */
     void cycleLandingMode(Player actor, String worldName) {
         String mode = switch (landingModeOf(worldName)) {
             case "station" -> "random";
@@ -11660,7 +12288,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(".").color(NamedTextColor.GREEN)));
     }
 
-    /** Cycles a planet's locked-in weather: clear → rain → thunder → off. */
+    /**
+     * Cycles a planet's locked-in weather: clear → rain → thunder → off.
+     */
     void cycleWeather(Player actor, String worldName) {
         String current = getConfig().getString("weather-lock." + worldName, "off");
         String next = switch (current.toLowerCase(Locale.ROOT)) {
@@ -11699,7 +12329,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         return locked == null || locked.isBlank() ? "off" : locked.toLowerCase(Locale.ROOT);
     }
 
-    /** Cycles a player-owned planet's weather: normal → clear → rain → thunder → normal. */
+    /**
+     * Cycles a player-owned planet's weather: normal → clear → rain → thunder → normal.
+     */
     void cyclePlanetWeather(Player actor, MyPlanetData data) {
         String next = switch (effectivePlanetWeather(data)) {
             case "clear" -> "rain";
@@ -11734,7 +12366,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(".").color(NamedTextColor.GREEN)));
     }
 
-    /** Applies a weather mode to a loaded world right now (no-op when unloaded). */
+    /**
+     * Applies a weather mode to a loaded world right now (no-op when unloaded).
+     */
     private void applyWeatherNow(String worldName, String mode) {
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
@@ -11762,7 +12396,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         }
     }
 
-    /** Friendly label for a weather mode. */
+    /**
+     * Friendly label for a weather mode.
+     */
     static String weatherLabel(String mode) {
         return switch (mode == null ? "off" : mode.toLowerCase(Locale.ROOT)) {
             case "clear" -> "forced clear";
@@ -11772,7 +12408,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         };
     }
 
-    /** Pins a planet's spawn to where the admin is standing, inside that world. */
+    /**
+     * Pins a planet's spawn to where the admin is standing, inside that world.
+     */
     void setWorldSpawnHere(Player actor, String worldName) {
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
@@ -11798,7 +12436,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(").").color(NamedTextColor.GREEN)));
     }
 
-    /** Puts a planet's border back to the size its size level says it should have. */
+    /**
+     * Puts a planet's border back to the size its size level says it should have.
+     */
     void resetPlanetBorder(Player actor, String worldName) {
         World world = Bukkit.getWorld(worldName);
         if (world == null) {
@@ -11824,7 +12464,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         .color(NamedTextColor.GREEN)));
     }
 
-    /** Cycles a planet's menu icon through the admin palette. */
+    /**
+     * Cycles a planet's menu icon through the admin palette.
+     */
     void cyclePlanetIcon(Player actor, String worldName) {
         Material current = iconOverride(worldName);
         int index = current == null ? -1 : ICON_PALETTE.indexOf(current);
@@ -11840,7 +12482,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 .append(Component.text(".").color(NamedTextColor.GREEN)));
     }
 
-    /** Sends an admin to a planet's spawn, loading the world if it is unloaded. */
+    /**
+     * Sends an admin to a planet's spawn, loading the world if it is unloaded.
+     */
     void enterPlanetWorld(Player actor, String worldName) {
         World world = loadWorldNow(worldName);
         if (world == null) {
@@ -11997,7 +12641,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         + "name is retired forever.").color(NamedTextColor.GREEN)));
         if (Bukkit.getWorld(worldName) != null || !worldGone) {
             actor.sendMessage(Component.text("Note: the server still had '" + worldName + "' loaded, so its "
-                    + "folder may need deleting after a restart. Its name is retired either way.")
+                            + "folder may need deleting after a restart. Its name is retired either way.")
                     .color(NamedTextColor.YELLOW));
         }
         return true;
@@ -12022,7 +12666,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         new MyPlanetIntroMenu(this, player).open(player);
     }
 
-    /** Opens the public /planets menu (planet browser) for a player. */
+    /**
+     * Opens the public /planets menu (planet browser) for a player.
+     */
     void openPlanetsMenu(Player player) {
         if (refuseWhileFlying(player)) {
             return;
