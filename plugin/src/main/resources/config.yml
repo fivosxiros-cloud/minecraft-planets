@@ -459,6 +459,12 @@ sidebar:
       template: "&7Deaths     &8| &c%deaths%"
     - label: "Bounty"
       template: "&7Bounty     &8| &c%bounty% &e₾"
+    - label: Team
+      template: '&7Team       &8| &a%team%'
+    - label: Race
+      template: '&7Race       &8| &a%race%'
+    - label: Role
+      template: '&7Role       &8| &a%role%'
     # Examples you can turn on by deleting the "#":
     # - label: "Planets"
     #   template: "&7Planets &8| &a🪐 %planets%"

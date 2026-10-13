@@ -5,20 +5,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickEvent;
 import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
-import org.bukkit.Bukkit;
-import org.bukkit.Difficulty;
-import org.bukkit.GameMode;
-import org.bukkit.GameRule;
-import org.bukkit.Location;
-import org.bukkit.WorldBorder;
-import org.bukkit.Material;
-import org.bukkit.OfflinePlayer;
-import org.bukkit.Particle;
-import org.bukkit.Sound;
-import org.bukkit.Statistic;
-import org.bukkit.World;
-import org.bukkit.WorldCreator;
-import org.bukkit.WorldType;
+import org.bukkit.*;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandExecutor;
 import org.bukkit.command.CommandSender;
@@ -34,7 +21,6 @@ import org.bukkit.event.block.SignChangeEvent;
 import org.bukkit.event.entity.CreatureSpawnEvent;
 import org.bukkit.event.entity.EntityDamageByEntityEvent;
 import org.bukkit.event.entity.EntityDamageEvent;
-import org.bukkit.event.entity.EntityTargetLivingEntityEvent;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.potion.PotionEffectType;
@@ -4738,7 +4724,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             case "tick-speed", "tickspeed", "tick_speed" -> {
                 if (values.length == 0) {
                     // No value: report what the world is on right now.
-                    Integer current = world.getGameRuleValue(GameRule.RANDOM_TICK_SPEED);
+                    Integer current = world.getGameRuleValue(GameRules.RANDOM_TICK_SPEED);
                     player.sendMessage(Component.text("Random tick speed on ").color(NamedTextColor.GREEN)
                             .append(Component.text(planetName).color(NamedTextColor.YELLOW))
                             .append(Component.text(" is " + (current == null ? "0" : current)
@@ -4752,10 +4738,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         player.sendMessage(Component.text("Tick speed must be 0 or more.").color(NamedTextColor.RED));
                         return;
                     }
-                    world.setGameRule(GameRule.RANDOM_TICK_SPEED, speed);
+                    world.setGameRule(GameRules.RANDOM_TICK_SPEED, speed);
                     // Read it back, so the message always matches the world's
                     // real value (a gamerule that refused to change shows up).
-                    Integer applied = world.getGameRuleValue(GameRule.RANDOM_TICK_SPEED);
+                    Integer applied = world.getGameRuleValue(GameRules.RANDOM_TICK_SPEED);
                     int actual = applied == null ? speed : applied;
                     player.sendMessage(Component.text("Random tick speed on ").color(NamedTextColor.GREEN)
                             .append(Component.text(planetName).color(NamedTextColor.YELLOW))
@@ -4775,7 +4761,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     player.sendMessage(Component.text("Usage: /planets world <planet> gamerule <name> <value>").color(NamedTextColor.YELLOW));
                     return;
                 }
-                GameRule<?> rule = GameRule.getByName(values[0]);
+                NamespacedKey key = NamespacedKey.fromString(values[0]);
+                GameRule<?> rule = key == null ? null : Registry.GAME_RULE.get(key);
                 if (rule == null) {
                     player.sendMessage(Component.text("Unknown gamerule '").color(NamedTextColor.RED)
                             .append(Component.text(values[0]).color(NamedTextColor.YELLOW))
@@ -5101,7 +5088,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                     return;
                 }
                 boolean enabled = values[0].equalsIgnoreCase("on");
-                world.setGameRule(GameRule.DO_MOB_SPAWNING, enabled);
+                world.setGameRule(GameRules.SPAWN_MOBS, enabled);
                 player.sendMessage(Component.text("Mob spawning on ").color(NamedTextColor.GREEN)
                         .append(Component.text(planetName).color(NamedTextColor.YELLOW))
                         .append(Component.text(" is now " + (enabled ? "enabled" : "disabled") + ".").color(NamedTextColor.GREEN)));
@@ -5293,9 +5280,9 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 }
                 boolean enabled = values[0].equalsIgnoreCase("on");
                 if (property.equals("day-cycle")) {
-                    world.setGameRule(GameRule.DO_DAYLIGHT_CYCLE, enabled);
+                    world.setGameRule(GameRules.ADVANCE_TIME, enabled);
                 } else {
-                    world.setGameRule(GameRule.DO_WEATHER_CYCLE, enabled);
+                    world.setGameRule(GameRules.ADVANCE_WEATHER, enabled);
                 }
                 player.sendMessage(Component.text("The " + (property.equals("day-cycle") ? "day/night cycle" : "weather cycle") + " on ")
                         .color(NamedTextColor.GREEN)
@@ -5310,10 +5297,10 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                 statusLine(player, "Weather", weatherState + (lockedWeather != null ? " (locked: " + lockedWeather + ")" : ""));
                 statusLine(player, "Difficulty", world.getDifficulty().name().toLowerCase(Locale.ROOT));
                 statusLine(player, "PvP", world.getPVP() ? "enabled" : "disabled");
-                statusLine(player, "Random tick speed", String.valueOf(world.getGameRuleValue(GameRule.RANDOM_TICK_SPEED)));
-                statusLine(player, "Daylight cycle", world.getGameRuleValue(GameRule.DO_DAYLIGHT_CYCLE) ? "on" : "off");
-                statusLine(player, "Weather cycle", world.getGameRuleValue(GameRule.DO_WEATHER_CYCLE) ? "on" : "off");
-                statusLine(player, "Mob spawning", world.getGameRuleValue(GameRule.DO_MOB_SPAWNING) ? "on" : "off");
+                statusLine(player, "Random tick speed", String.valueOf(world.getGameRuleValue(GameRules.RANDOM_TICK_SPEED)));
+                statusLine(player, "Daylight cycle", world.getGameRuleValue(GameRules.ADVANCE_TIME) ? "on" : "off");
+                statusLine(player, "Weather cycle", world.getGameRuleValue(GameRules.ADVANCE_WEATHER) ? "on" : "off");
+                statusLine(player, "Mob spawning", world.getGameRuleValue(GameRules.SPAWN_MOBS) ? "on" : "off");
                 statusLine(player, "Spawn limits", "monsters " + world.getMonsterSpawnLimit()
                         + ", animals " + world.getAnimalSpawnLimit()
                         + ", ambient " + world.getAmbientSpawnLimit()
@@ -7227,7 +7214,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
             }
             playerMusic.playNow(player, sound);
             player.sendMessage(Component.text("\u25B6 Now playing: ").color(NamedTextColor.GREEN)
-                    .append(Component.text(PlayerMusic.pretty(sound.name())).color(NamedTextColor.YELLOW)));
+                    .append(Component.text(PlayerMusic.pretty( sound.name())).color(NamedTextColor.YELLOW)));
             return;
         }
         // Anything left is a name: one of their playlists first, then a song.
@@ -8499,7 +8486,8 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         boolean wantsDeaths = template.contains("%deaths%");
         boolean wantsKills = template.contains("%kills%");
         boolean wantsPlanets = template.contains("%planets%");
-        String rendered = template
+
+        String rendered = playerDataService.parsePlayersProfileTemplate(player, template)
                 .replace("%planet%", worldLabel(world))
                 .replace("%world%", world == null ? "?" : world.getName())
                 .replace("%x%", String.valueOf(here.getBlockX()))
@@ -8533,6 +8521,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
                         ? "0" : String.valueOf(cardService.copies(player.getUniqueId())))
                 .replace("%cards-time%", cardService == null
                         ? "-" : cardService.remainingShort());
+
         if (wantsBalance) {
             rendered = rendered.replace("%balance%",
                     formatPrice(hasEconomy() ? getBalance(player) : 0));
@@ -10058,7 +10047,7 @@ public final class Planets extends JavaPlugin implements CommandExecutor, TabCom
         WorldBorder border = world.getWorldBorder();
         border.setCenter(center);
         border.setSize((int) borderRadius);
-        border.setWarningTime(5);
+        border.setWarningTimeTicks(5*20);
         recordBorder(world.getName(), borderRadius);
         // ~10% of the border, and never more than the plot itself: a 5x5 block
         // starter plot must not be permanently wrapped in the red border tint.

@@ -102,7 +102,10 @@ public final class SidebarScoreboard {
             new Line("time", "Time",       "&7Time       &8| &e%realtime%"),
             new Line("kills", "Kills",       "&7Kills      &8| &d%kills%"),
             new Line("deaths", "Deaths",     "&7Deaths     &8| &c%deaths%"),
-            new Line("bounty", "Bounty",     "&7Bounty     &8| &c%bounty% &e\u20BE"));
+            new Line("bounty", "Bounty",     "&7Bounty     &8| &c%bounty% &e\u20BE"),
+            new Line("race", "Race",         "&7Race       &8| &a%race%"),
+            new Line("role", "Role",         "&7Role       &8| &a%role%"),
+            new Line("team", "Team",         "&7Team       &8| &a%team%"));
 
     private final Planets plugin;
     /** One board per player, so each sidebar shows that player's own numbers. */

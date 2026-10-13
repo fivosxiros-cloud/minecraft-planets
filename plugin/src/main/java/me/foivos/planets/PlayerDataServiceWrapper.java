@@ -32,4 +32,12 @@ public class PlayerDataServiceWrapper implements PlayerProfileListener {
     public void onShutdown() {
         dataService.removePlayerProfileEventListener(this);
     }
+
+    public String parsePlayersProfileTemplate(Player player, String template){
+        var profile = dataService.getProfile(player.getUniqueId()).orElse(PlayerProfile.empty());
+
+        return template.replace("%race%", profile.race())
+                       .replace("%role%", profile.role())
+                       .replace("%team%", profile.team());
+    }
 }
